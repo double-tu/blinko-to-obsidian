@@ -1,94 +1,117 @@
-# Obsidian Sample Plugin
+# Blinko Sync
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Blinko Sync is an Obsidian community plugin that bridges a self‑hosted [Blinko](https://github.com/blinko-space/blinko) “flash note” server with your local knowledge base. It continuously imports new or updated Blinko notes, rewrites attachment references so they work offline inside Obsidian, and optionally removes local copies when the source note is deleted or moved to the recycle bin.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+---
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+## Background & Motivation
 
-## First time developing plugins?
+Many users capture quick thoughts, voice notes, and images in Blinko but do long‑form writing or knowledge management in Obsidian. Moving content between the two systems manually is tedious and error‑prone. Blinko Sync automates this workflow:
 
-Quick starting guide for new plugin devs:
+1. Poll Blinko’s API on demand or on a schedule.
+2. Fetch notes and binary attachments incrementally (based on `updatedAt`).
+3. Convert each item into Markdown (`blinko-{id}.md`) with rich frontmatter.
+4. Rewrite any inline attachment URLs to Obsidian wikilinks and download the files.
+5. (Optional) Detect deletions/recycle‑bin items upstream and purge the local copies.
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+The result is a continuously updated “Blinko” folder inside your vault that mirrors the canonical truth from your server.
 
-## Releasing new releases
+---
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+## Feature Overview
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+- **Configurable sync targets**: separate folders for notes and attachments.
+- **Incremental sync**: tracks `lastSyncTime` to avoid re-downloading unchanged items.
+- **Attachment handling**:
+  - Downloads referenced images/audio once.
+  - Rewrites Markdown embeds (`![...](url)`) to local `![[filename]]`.
+  - Appends wiki embeds for attachments not explicitly referenced in the body.
+- **Typed metadata**: frontmatter stores id, timestamps, `blinkoType` (`flash`, `note`, `todo`), tags, and `blinkoAttachments`.
+- **Manual + automatic triggers**: ribbon icon, command palette, and background interval.
+- **Deletion reconciliation**:
+  - Base mode removes local copies when the remote note truly disappears.
+  - Optional toggle also removes notes that currently sit in Blinko’s recycle bin.
+- **Diagnostics**: granular logging via the Debug mode toggle.
 
-## Adding your plugin to the community plugin list
+---
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+## Installation & Setup
 
-## How to use
+1. **Clone / build**  
+   ```bash
+   npm install
+   npm run build
+   ```
+   Copy `manifest.json`, `main.js`, and `styles.css` into `<Vault>/.obsidian/plugins/blinko-to-obsidian/`.
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+2. **Enable**  
+   In Obsidian, go to **Settings → Community plugins**, enable **Blinko Sync**, and open its settings tab.
 
-## Manually installing the plugin
+3. **Configure settings**
+   - **Server URL** – Base URL pointing to your Blinko API (e.g., `https://example.com/api`).
+   - **Access token** – Bearer token for authenticated requests.
+   - **Note folder / Attachment folder** – Relative paths inside the vault.
+   - **Auto sync interval** – Minutes between background syncs (`0` disables).
+   - **Deletion check** – Toggle + interval for removing local notes when deleted upstream.
+   - **Recycle-bin deletion** – Optional toggle to also remove notes that are merely in Blinko’s recycle bin.
+   - **Debug mode** – Writes verbose logs (`[Blinko Sync] ...`) to the developer console.
+   - **Last sync time** – Inspect or reset the stored timestamp to re-import everything.
+   - **Manual sync button** – Run one sync immediately from the settings panel.
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+---
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint ./src/`
+## Usage Workflow
 
-## Funding URL
+1. **Manual sync**  
+   Click the ribbon icon or run the `Sync Blinko` command. Status bar text flips to “Blinko Syncing…”. When finished you’ll see a toast with the count of new notes.
 
-You can include funding URLs where people who use your plugin can financially support it.
+2. **Automatic sync**  
+   When the interval is non-zero, the plugin schedules a background sync. It uses the same logic as the manual call, so the vault stays updated even when you forget to run it.
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+3. **Deletion reconciliation**  
+   - Enable **Deletion check** to periodically compare local `blinko-*.md` files against the server using `note/list-by-ids`. Missing items are removed along with their attachments.
+   - Enable **Delete notes in recycle bin** if you want items currently in Blinko’s recycle bin to vanish locally as well.
+   - Run the `Blinko: reconcile deletions` command at any time for an immediate cleanup.
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
+4. **Resulting files**  
+   - Notes live under `Note folder` as `blinko-{id}.md`.
+   - Attachments live under `Attachment folder`.
+   - Frontmatter example:
+     ```yaml
+     ---
+     id: 42
+     date: 2024-01-01T10:00:00.000Z
+     updated: 2024-01-02T11:00:00.000Z
+     source: blinko
+     blinkoType: flash
+     blinkoTypeCode: 0
+     blinkoAttachments: ["photo.png", "recording.webm"]
+     tags: ["work/tasks", "ideas"]
+     ---
+     ```
 
-If you have multiple URLs, you can also do:
+---
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
+## Tips & Troubleshooting
 
-## API Documentation
+- **HTML response error** – Usually means the Server URL points to a UI page. Ensure it ends at the API root so `/v1/note/list` returns JSON.
+- **Attachment 404s** – Double-check any reverse proxy rewrites. The plugin now resolves both relative (`/api/...`) and absolute URLs using your base origin.
+- **Large imports** – Use the “Reset last sync time” button to replay from scratch. The sync loop paginates 50 notes at a time until it reaches the previous `lastSyncTime`.
+- **Debugging** – Turn on Debug mode and inspect the console for `[Blinko Sync]` logs to see API URLs, downloaded files, and deletion actions.
 
-See https://github.com/obsidianmd/obsidian-api
+---
+
+## Development Notes
+
+- Tooling: TypeScript, esbuild, npm.
+- Commands:
+  ```bash
+  npm run dev   # watch build
+  npm run build # lint + bundle
+  ```
+- Release artifacts: `manifest.json`, `main.js`, `styles.css`.
+- Contributions are welcome—split logic into modules under `src/` following the existing structure (client, sync manager, vault adapter, deletion manager, settings/types).
+
+---
+
+Enjoy seamless Blinko → Obsidian sync! If you have ideas or run into edge cases, feel free to open an issue or PR.***

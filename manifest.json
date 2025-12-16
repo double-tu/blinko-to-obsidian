@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "blinko-to-obsidian",
+	"name": "Blinko Sync",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Incrementally sync notes and attachments from Blinko into Obsidian.",
+	"author": "Blinko Sync Contributors",
+	"authorUrl": "https://github.com",
 	"isDesktopOnly": false
 }
