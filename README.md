@@ -26,7 +26,7 @@ The result is a continuously updated “Blinko” folder inside your vault that 
   - Downloads referenced images/audio once.
   - Rewrites Markdown embeds (`![...](url)`) to local `![[filename]]`.
   - Appends wiki embeds for attachments not explicitly referenced in the body.
-- **Daily Notes insertion**: optionally mirror today’s flash notes into your Daily/Periodic note between configurable template markers.
+- **Daily Notes insertion**: optionally mirror today’s Blinko notes (flash, note, todo) into your Daily/Periodic note between configurable template markers.
 - **Typed metadata**: frontmatter stores id, timestamps, `blinkoType` (`flash`, `note`, `todo`), tags, and `blinkoAttachments`.
 - **Manual + automatic triggers**: ribbon icon, command palette, and background interval.
 - **Deletion reconciliation**:
@@ -53,7 +53,7 @@ The result is a continuously updated “Blinko” folder inside your vault that 
    - **Access token** – Bearer token for authenticated requests.
    - **Note folder / Attachment folder** – Base folders inside the vault (notes are automatically subdivided into `flash/`, `note/`, and `todo/`).
    - **Include tags in frontmatter** – Toggle whether remote tags are duplicated into YAML metadata or only left inline in the body.
-   - **Daily Notes insertion** – Optional toggle to embed today’s flash notes into your Daily/Periodic note. Configure the folder, Moment-style filename format, and start/end marker lines (defaults: `<!-- start of flash-notes -->` / `<!-- end of flash-notes -->`).
+  - **Daily Notes insertion** – Optional toggle to embed today’s Blinko notes into your Daily/Periodic note. Configure the folder, Moment-style filename format, and start/end marker lines (defaults: `<!-- start of flash-notes -->` / `<!-- end of flash-notes -->`).
    - **Auto sync interval** – Minutes between background syncs (`0` disables).
    - **Deletion check** – Toggle + interval for removing local notes when deleted upstream.
    - **Recycle-bin deletion** – Optional toggle to also remove notes that are merely in Blinko’s recycle bin.
@@ -73,8 +73,8 @@ The result is a continuously updated “Blinko” folder inside your vault that 
 
 3. **Daily Notes insertion**  
    - Enable the Daily Notes toggle, choose the folder + file naming format, and ensure your template contains the start/end marker lines.
-   - After each sync the plugin rewrites everything between `<!-- start of flash-notes -->` and `<!-- end of flash-notes -->` with block embeds such as `![[Blinko/Notes/Flash/blinko-123#^blinko-note-123]]`.
-   - Leave the markers empty if you want to “clear” yesterday’s content when no flashes were created today.
+   - After each sync the plugin rewrites everything between `<!-- start of flash-notes -->` and `<!-- end of flash-notes -->` with block embeds such as `![[Blinko/Notes/Flash/blinko-123]]`.
+   - Leave the markers empty if you want to “clear” yesterday’s content when no Blinko notes were created for that date.
 
 4. **Deletion reconciliation**  
    - Enable **Deletion check** to periodically compare local `blinko-*.md` files against the server using `note/list-by-ids`. Missing items are removed along with their attachments.

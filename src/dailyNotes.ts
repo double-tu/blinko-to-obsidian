@@ -16,6 +16,13 @@ interface DailyNoteReferenceGroup {
 	refBlocks: DailyNoteReferenceBlock[];
 }
 
+type MarkerMatchType = 'exact' | 'whitespace';
+
+interface MarkerSearchResult {
+	index: number;
+	matchType: MarkerMatchType;
+}
+
 export class DailyNoteManager {
 	private readonly dateKeyFormat = 'YYYYMMDD';
 
@@ -29,32 +36,88 @@ export class DailyNoteManager {
 		this.settings = settings;
 	}
 
-	async insertFlashNotes(targetDate: moment.Moment, newNotes: FlashNoteJournalEntry[]): Promise<void> {
+	async insertFlashNotes(newNotes: FlashNoteJournalEntry[]): Promise<void> {
 		if (!this.settings.dailyNotesToggle) {
+			this.log('Daily Notes insertion disabled, skipping Blinko note embedding.');
 			return;
 		}
 
+		const targets = this.collectTargetDates(newNotes);
+		if (!targets.length) {
+			this.log('No Blinko notes with valid dates, skipping daily note updates.');
+			return;
+		}
+
+		this.log(
+			'Daily Notes: preparing to insert %d Blinko notes across %d dates.',
+			newNotes?.length ?? 0,
+			targets.length,
+		);
+
+		for (const target of targets) {
+			await this.insertFlashNotesForDate(target, newNotes);
+		}
+	}
+
+	private collectTargetDates(newNotes: FlashNoteJournalEntry[]): moment.Moment[] {
+		const unique = new Map<string, moment.Moment>();
+		for (const note of newNotes ?? []) {
+			const created = moment(note.createdAt);
+			if (!created.isValid()) {
+				continue;
+			}
+
+			const normalized = created.clone().startOf('day');
+			const key = normalized.format(this.dateKeyFormat);
+			if (!unique.has(key)) {
+				unique.set(key, normalized);
+			}
+		}
+
+		return Array.from(unique.values()).sort((a, b) => a.valueOf() - b.valueOf());
+	}
+
+	private async insertFlashNotesForDate(targetDate: moment.Moment, newNotes: FlashNoteJournalEntry[]): Promise<void> {
 		const dailyNotePath = this.getDailyNotePath(targetDate);
 		if (!dailyNotePath) {
 			return;
 		}
 
+		const displayDate = targetDate.format('YYYY-MM-DD');
+		this.log('Daily Notes: processing %s at %s.', displayDate, dailyNotePath);
+
 		try {
-			const allNotes = await this.collectFlashNotesForDate(targetDate, newNotes);
+			const file = this.getExistingDailyNote(dailyNotePath);
+			if (!file) {
+				this.log(`Daily Note not found for ${displayDate} at ${dailyNotePath}, skipping.`);
+				return;
+			}
+
+			this.log('Daily Notes: found existing note at %s.', file.path);
+			const allNotes = await this.collectBlinkoNotesForDate(targetDate, newNotes);
 			const references = this.buildReferenceGroups(allNotes);
-			await this.saveReferences(dailyNotePath, references);
+			if (!references.length) {
+				this.log(`No Blinko notes to insert for ${displayDate}, skipping daily note update.`);
+				return;
+			}
+
+			const blockCount = references.reduce((total, group) => total + group.refBlocks.length, 0);
+			this.log('Daily Notes: inserting %d references into %s for %s.', blockCount, file.path, displayDate);
+			await this.saveReferences(file, references);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error ?? '');
 			this.log(`Failed to insert Daily Note references: ${reason}`);
 		}
 	}
 
-	private async collectFlashNotesForDate(
+	private async collectBlinkoNotesForDate(
 		targetDate: moment.Moment,
 		newNotes: FlashNoteJournalEntry[],
 	): Promise<FlashNoteJournalEntry[]> {
 		const targetKey = targetDate.format(this.dateKeyFormat);
 		const aggregated = new Map<number, FlashNoteJournalEntry>();
+		const displayDate = targetDate.format('YYYY-MM-DD');
+		let syncedMatches = 0;
 
 		for (const note of newNotes ?? []) {
 			const noteKey = this.getMomentKey(note.createdAt);
@@ -62,30 +125,38 @@ export class DailyNoteManager {
 				continue;
 			}
 			aggregated.set(note.id, note);
+			syncedMatches += 1;
 		}
 
-		const fromVault = await this.loadFlashNotesFromVault(targetDate);
+		const fromVault = await this.loadBlinkoNotesFromVault(targetDate);
 		for (const entry of fromVault) {
 			aggregated.set(entry.id, entry);
 		}
+
+		this.log(
+			'Daily Notes: collected %d Blinko notes for %s (synced: %d, vault snapshots: %d).',
+			aggregated.size,
+			displayDate,
+			syncedMatches,
+			fromVault.length,
+		);
 
 		return Array.from(aggregated.values()).sort(
 			(a, b) => this.getTimestamp(a.createdAt) - this.getTimestamp(b.createdAt),
 		);
 	}
 
-	private async loadFlashNotesFromVault(targetDate: moment.Moment): Promise<FlashNoteJournalEntry[]> {
-		const flashFolderPath = this.getFlashFolderPath();
-		if (!flashFolderPath) {
+	private async loadBlinkoNotesFromVault(targetDate: moment.Moment): Promise<FlashNoteJournalEntry[]> {
+		const folders = this.getBlinkoNoteFolders();
+		if (!folders.length) {
 			return [];
 		}
 
 		const files = this.app.vault.getFiles();
-		const prefix = `${flashFolderPath}/`;
 		const targetKey = targetDate.format(this.dateKeyFormat);
 		const snapshots: FlashNoteJournalEntry[] = [];
 		for (const file of files) {
-			if (!file.path.startsWith(prefix)) {
+			if (!this.isBlinkoNotePath(file.path, folders)) {
 				continue;
 			}
 
@@ -108,6 +179,8 @@ export class DailyNoteManager {
 			});
 		}
 
+		const label = targetDate.format('YYYY-MM-DD');
+		this.log('Daily Notes: located %d existing Blinko notes in vault for %s.', snapshots.length, label);
 		return snapshots;
 	}
 
@@ -131,24 +204,18 @@ export class DailyNoteManager {
 
 		return [
 			{
-				title: 'Flash Notes',
+				title: 'Blinko Notes',
 				refBlocks: blocks,
 			},
 		];
 	}
 
-	private async saveReferences(path: string, references: DailyNoteReferenceGroup[]): Promise<void> {
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) {
-			new Notice(`Daily Note not found, please create: ${path}`);
-			return;
-		}
-
+	private async saveReferences(file: TFile, references: DailyNoteReferenceGroup[]): Promise<void> {
 		const content = await this.app.vault.read(file);
 		const payload = this.renderReferences(references);
 		let updated: string;
 		try {
-			updated = this.replaceRegion(content, payload);
+			updated = this.replaceRegion(file.path, content, payload);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error ?? '');
 			new Notice(reason);
@@ -156,10 +223,13 @@ export class DailyNoteManager {
 		}
 
 		if (updated === content) {
+			this.log('Daily Notes: no changes detected for %s (markers already contain latest references).', file.path);
 			return;
 		}
 
+		this.log('Daily Notes: writing updated references into %s.', file.path);
 		await this.app.vault.modify(file, updated);
+		this.log('Daily Notes: update complete for %s.', file.path);
 	}
 
 	private renderReferences(groups: DailyNoteReferenceGroup[]): string {
@@ -167,16 +237,23 @@ export class DailyNoteManager {
 			return '';
 		}
 
+		const embedContent = Boolean(this.settings.dailyNotesEmbedContent);
 		const sections = groups.map((group) => {
 			const header = `### ${group.title}`;
-			const embeds = group.refBlocks.map((block) => `![[${block.filePath}#^${block.blockId}]]`);
-			return `${header}\n${embeds.join('\n')}`;
+			const references = group.refBlocks.map((block) => this.renderReferenceLine(block, embedContent));
+			return `${header}\n${references.join('\n')}`;
 		});
 
 		return `\n${sections.join('\n\n')}\n`;
 	}
 
-	private replaceRegion(content: string, payload: string): string {
+	private renderReferenceLine(block: DailyNoteReferenceBlock, embedContent: boolean): string {
+		const linkTarget = block.filePath;
+		const link = embedContent ? `![[${linkTarget}]]` : `[[${linkTarget}]]`;
+		return `> ${link}`;
+	}
+
+	private replaceRegion(filePath: string, content: string, payload: string): string {
 		const startMarker = (this.settings.dailyNotesInsertAfter || '').trim();
 		const endMarker = (this.settings.dailyNotesInsertBefore || '').trim();
 
@@ -184,22 +261,49 @@ export class DailyNoteManager {
 		const normalizedEnd = endMarker || '<!-- end of flash-notes -->';
 
 		const lines = content.replace(/\r\n/g, '\n').split('\n');
-		const startIndex = lines.findIndex((line) => line.trim() === normalizedStart);
-		if (startIndex === -1) {
+		const startLookup = this.findMarkerIndex(lines, normalizedStart);
+		if (!startLookup) {
+			this.logMissingMarker(filePath, 'start', normalizedStart, lines, 0);
 			throw new Error(`Daily Notes start marker not found: "${normalizedStart}"`);
 		}
 
-		const endIndex = lines.slice(startIndex + 1).findIndex((line) => line.trim() === normalizedEnd);
-		if (endIndex === -1) {
+		this.logMarkerMatch(filePath, 'start', normalizedStart, startLookup.index + 1, startLookup.matchType, lines[startLookup.index]);
+
+		const afterStartIndex = startLookup.index + 1;
+		const trailingLines = lines.slice(afterStartIndex);
+		const endLookup = this.findMarkerIndex(trailingLines, normalizedEnd);
+		if (!endLookup) {
+			this.logMissingMarker(filePath, 'end', normalizedEnd, trailingLines, afterStartIndex);
 			throw new Error(`Daily Notes end marker not found: "${normalizedEnd}"`);
 		}
 
-		const absoluteEndIndex = startIndex + 1 + endIndex;
-		const before = lines.slice(0, startIndex + 1);
+		const absoluteEndIndex = afterStartIndex + endLookup.index;
+		this.logMarkerMatch(
+			filePath,
+			'end',
+			normalizedEnd,
+			absoluteEndIndex + 1,
+			endLookup.matchType,
+			lines[absoluteEndIndex],
+		);
+
+		this.log(
+			'Daily Notes: replacing content between markers (%s -> %s) in %s.',
+			`line ${startLookup.index + 1}`,
+			`line ${absoluteEndIndex + 1}`,
+			filePath,
+		);
+
+		const before = lines.slice(0, startLookup.index + 1);
 		const after = lines.slice(absoluteEndIndex);
 		const payloadLines = payload ? payload.replace(/\r\n/g, '\n').split('\n') : [];
 		const merged = [...before, ...payloadLines, ...after];
 		return merged.join('\n');
+	}
+
+	private getExistingDailyNote(path: string): TFile | null {
+		const abstract = this.app.vault.getAbstractFileByPath(path);
+		return abstract instanceof TFile ? abstract : null;
 	}
 
 	private getDailyNotePath(targetDate: moment.Moment): string | null {
@@ -224,10 +328,38 @@ export class DailyNoteManager {
 		return normalizePath(fullPath);
 	}
 
-	private getFlashFolderPath(): string {
+	private getBlinkoNoteFolders(): string[] {
+		const folders = new Set<string>();
 		const baseFolder = this.normalizeFolder(this.settings.noteFolder);
-		const folder = baseFolder ? `${baseFolder}/Flash` : 'Flash';
-		return normalizePath(folder);
+		const typeFolders = ['Flash', 'Note', 'Todo'];
+
+		for (const typeFolder of typeFolders) {
+			const resolved = baseFolder ? `${baseFolder}/${typeFolder}` : typeFolder;
+			const normalized = this.normalizeFolder(resolved);
+			if (normalized) {
+				folders.add(normalized);
+			}
+		}
+
+		if (baseFolder) {
+			folders.add(baseFolder);
+		} else {
+			folders.add('');
+		}
+
+		return Array.from(folders);
+	}
+
+	private isBlinkoNotePath(filePath: string, folders: string[]): boolean {
+		return folders.some((folder) => this.pathStartsWithFolder(filePath, folder));
+	}
+
+	private pathStartsWithFolder(filePath: string, folder: string): boolean {
+		if (!folder) {
+			return !filePath.includes('/');
+		}
+		const normalizedFolder = folder.endsWith('/') ? folder : `${folder}/`;
+		return filePath.startsWith(normalizedFolder);
 	}
 
 	private normalizeFolder(input?: string): string {
@@ -281,5 +413,72 @@ export class DailyNoteManager {
 	private getTimestamp(value: string): number {
 		const ms = Date.parse(value);
 		return Number.isFinite(ms) ? ms : 0;
+	}
+
+	private findMarkerIndex(lines: string[], marker: string): MarkerSearchResult | null {
+		const normalizedMarker = marker.trim();
+		const exactIndex = lines.findIndex((line) => line.trim() === normalizedMarker);
+		if (exactIndex !== -1) {
+			return { index: exactIndex, matchType: 'exact' };
+		}
+
+		const collapsedMarker = this.normalizeMarkerForComparison(normalizedMarker);
+		const relaxedIndex = lines.findIndex(
+			(line) => this.normalizeMarkerForComparison(line.trim()) === collapsedMarker,
+		);
+		if (relaxedIndex !== -1) {
+			return { index: relaxedIndex, matchType: 'whitespace' };
+		}
+
+		return null;
+	}
+
+	private normalizeMarkerForComparison(value: string): string {
+		return value.replace(/\s+/g, '');
+	}
+
+	private logMarkerMatch(
+		filePath: string,
+		type: 'start' | 'end',
+		marker: string,
+		lineNumber: number,
+		matchType: MarkerMatchType,
+		lineValue: string,
+	): void {
+		const matchDescription = matchType === 'exact' ? 'exact' : 'whitespace-insensitive';
+		this.log(
+			'Daily Notes: %s marker found in %s on line %d using %s match. Expected "%s", line content "%s".',
+			type,
+			filePath,
+			lineNumber,
+			matchDescription,
+			marker,
+			lineValue.trim(),
+		);
+	}
+
+	private logMissingMarker(
+		filePath: string,
+		type: 'start' | 'end',
+		marker: string,
+		lines: string[],
+		lineOffset: number,
+	): void {
+		const preview = this.buildLinePreview(lines, lineOffset);
+		this.log(
+			'Daily Notes: %s marker "%s" not found in %s starting at line %d. Preview: %s',
+			type,
+			marker,
+			filePath,
+			lineOffset + 1,
+			preview || '<no lines>',
+		);
+	}
+
+	private buildLinePreview(lines: string[], lineOffset: number): string {
+		return lines
+			.slice(0, 5)
+			.map((line, index) => `[${lineOffset + index + 1}] ${line.trim()}`)
+			.join(' | ');
 	}
 }

@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFolder, moment } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFolder } from 'obsidian';
 import { BlinkoClient } from './src/client';
 import { BlinkoSettings, DEFAULT_SETTINGS } from './src/settings';
 import { SyncManager } from './src/syncManager';
@@ -57,7 +57,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 			const { newNotes, flashNotes } = await this.syncManager.startSync();
 			this.setStatusIdle(this.settings.lastSyncTime || Date.now());
 			if (this.dailyNoteManager) {
-				await this.dailyNoteManager.insertFlashNotes(moment(), flashNotes);
+				await this.dailyNoteManager.insertFlashNotes(flashNotes);
 			}
 			new Notice(`Sync complete: ${newNotes} new notes added.`);
 			if (shouldRunDeletionCheck) {
@@ -412,8 +412,10 @@ class BlinkoSettingTab extends PluginSettingTab {
 		containerEl.createEl('h3', { text: 'Daily Notes' });
 
 		new Setting(containerEl)
-			.setName('Insert flash notes')
-			.setDesc('When enabled, today’s Blinko flash notes are embedded between template markers in your Daily Note after each sync.')
+			.setName('Insert Blinko notes')
+			.setDesc(
+				'When enabled, each Blinko note (flash, note, todo) is embedded between template markers in the Daily Note for its creation date—if that note already exists.',
+			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.dailyNotesToggle).onChange(async (value) => {
 					this.plugin.settings.dailyNotesToggle = value;
@@ -464,7 +466,7 @@ class BlinkoSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Start marker')
-			.setDesc('Exact line that marks where flash notes begin (will be replaced on each sync).')
+			.setDesc('Exact line that marks where Blinko notes begin (will be replaced on each sync).')
 			.addText((text) =>
 				text
 					.setPlaceholder('<!-- start of flash-notes -->')
@@ -477,13 +479,25 @@ class BlinkoSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('End marker')
-			.setDesc('Exact line that marks where flash notes end.')
+			.setDesc('Exact line that marks where Blinko notes end.')
 			.addText((text) =>
 				text
 					.setPlaceholder('<!-- end of flash-notes -->')
 					.setValue(this.plugin.settings.dailyNotesInsertBefore)
 					.onChange(async (value) => {
 						this.plugin.settings.dailyNotesInsertBefore = value || '<!-- end of flash-notes -->';
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Embed Blinko note content')
+			.setDesc('Use ![[...]] to embed Blinko note contents instead of plain [[...]] links.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.dailyNotesEmbedContent)
+					.onChange(async (value) => {
+						this.plugin.settings.dailyNotesEmbedContent = value;
 						await this.plugin.saveSettings();
 					}),
 			);

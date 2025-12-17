@@ -8,6 +8,7 @@ export interface BlinkoSettings {
 	dailyNotesFormat: string;
 	dailyNotesInsertAfter: string;
 	dailyNotesInsertBefore: string;
+	dailyNotesEmbedContent: boolean;
 	lastSyncTime: number;
 	autoSyncInterval: number; // minutes, 0 disabled
 	debugMode: boolean;
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: BlinkoSettings = {
 	dailyNotesFormat: 'YYYY-MM-DD',
 	dailyNotesInsertAfter: '<!-- start of flash-notes -->',
 	dailyNotesInsertBefore: '<!-- end of flash-notes -->',
+	dailyNotesEmbedContent: false,
 	lastSyncTime: 0,
 	autoSyncInterval: 30,
 	debugMode: false,

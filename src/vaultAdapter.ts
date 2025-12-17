@@ -1,4 +1,4 @@
-import { App, normalizePath, TFile, TFolder } from 'obsidian';
+import { App, normalizePath, TFile, TFolder, moment } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
@@ -96,8 +96,8 @@ export class VaultAdapter {
 		const frontmatterLines = [
 			'---',
 			`id: ${note.id}`,
-			`date: ${note.createdAt}`,
-			`updated: ${note.updatedAt}`,
+			`date: ${this.formatLocalTimestamp(note.createdAt)}`,
+			`updated: ${this.formatLocalTimestamp(note.updatedAt)}`,
 			'source: blinko',
 			`blinkoType: ${this.mapType(note.type)}`,
 			`blinkoTypeCode: ${typeof note.type === 'number' ? note.type : 0}`,
@@ -372,6 +372,20 @@ export class VaultAdapter {
 		return baseFolder
 			? normalizePath(`${baseFolder}/${filename}`)
 			: normalizePath(filename);
+	}
+
+	private formatLocalTimestamp(value?: string | null): string {
+		if (!value) {
+			return '';
+		}
+
+		const parsed = moment(value);
+		if (!parsed.isValid()) {
+			this.log('Blinko note timestamp invalid, skipping conversion: %s', value);
+			return value;
+		}
+
+		return parsed.local().format('YYYY-MM-DDTHH:mm:ssZ');
 	}
 
 	private ensureBlockId(content: string, blockId: string): string {

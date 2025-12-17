@@ -2,7 +2,6 @@ import { BlinkoClient } from './client';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, FlashNoteJournalEntry } from './types';
 import { VaultAdapter, SavedNoteResult } from './vaultAdapter';
-import { isFlashType } from './noteUtils';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 type SaveHandler = () => Promise<void>;
@@ -73,9 +72,7 @@ export class SyncManager {
 
 					if (result.saveResult) {
 						newNotes += 1;
-						if (isFlashType(note.type)) {
-							flashNotes.push(this.buildFlashSnapshot(note, result.saveResult));
-						}
+						flashNotes.push(this.buildFlashSnapshot(note, result.saveResult));
 					}
 				}
 
