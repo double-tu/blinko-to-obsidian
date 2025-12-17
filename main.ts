@@ -325,6 +325,16 @@ class BlinkoSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		new Setting(containerEl)
+			.setName('Include tags in frontmatter')
+			.setDesc('When enabled, note tags are written to the YAML frontmatter. Disable to rely on in-body tags only.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.includeFrontmatterTags).onChange(async (value) => {
+					this.plugin.settings.includeFrontmatterTags = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
 		containerEl.createEl('h3', { text: 'Deletion reconciliation (optional)' });
 
 		new Setting(containerEl)

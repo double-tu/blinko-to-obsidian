@@ -20,7 +20,7 @@ The result is a continuously updated “Blinko” folder inside your vault that 
 
 ## Feature Overview
 
-- **Configurable sync targets**: separate folders for notes and attachments.
+- **Configurable sync targets**: choose base folders and the plugin organizes notes into `flash`, `note`, and `todo` subfolders automatically, with attachments stored separately.
 - **Incremental sync**: tracks `lastSyncTime` to avoid re-downloading unchanged items.
 - **Attachment handling**:
   - Downloads referenced images/audio once.
@@ -50,7 +50,8 @@ The result is a continuously updated “Blinko” folder inside your vault that 
 3. **Configure settings**
    - **Server URL** – Base URL pointing to your Blinko API (e.g., `https://example.com/api`).
    - **Access token** – Bearer token for authenticated requests.
-   - **Note folder / Attachment folder** – Relative paths inside the vault.
+   - **Note folder / Attachment folder** – Base folders inside the vault (notes are automatically subdivided into `flash/`, `note/`, and `todo/`).
+   - **Include tags in frontmatter** – Toggle whether remote tags are duplicated into YAML metadata or only left inline in the body.
    - **Auto sync interval** – Minutes between background syncs (`0` disables).
    - **Deletion check** – Toggle + interval for removing local notes when deleted upstream.
    - **Recycle-bin deletion** – Optional toggle to also remove notes that are merely in Blinko’s recycle bin.
@@ -74,7 +75,7 @@ The result is a continuously updated “Blinko” folder inside your vault that 
    - Run the `Blinko: reconcile deletions` command at any time for an immediate cleanup.
 
 4. **Resulting files**  
-   - Notes live under `Note folder` as `blinko-{id}.md`.
+   - Notes live under `Note folder/<type>/` as `blinko-{id}.md` (`type` = `flash`, `note`, or `todo`).
    - Attachments live under `Attachment folder`.
    - Frontmatter example:
      ```yaml

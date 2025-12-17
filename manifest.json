@@ -4,7 +4,7 @@
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
 	"description": "Incrementally sync notes and attachments from Blinko into Obsidian.",
-	"author": "Blinko Sync Contributors",
-	"authorUrl": "https://github.com",
+	"author": "tu",
+	"authorUrl": "https://github.com/double-tu/blinko-to-obsidian",
 	"isDesktopOnly": false
 }

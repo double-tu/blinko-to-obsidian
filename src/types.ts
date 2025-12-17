@@ -1,6 +1,8 @@
 export interface BlinkoTag {
 	id?: number;
 	name: string;
+	parent?: number;
+	tag?: BlinkoTag;
 }
 
 export interface BlinkoAttachment {

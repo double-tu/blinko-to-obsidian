@@ -1,4 +1,4 @@
-import { App, normalizePath, TFile } from 'obsidian';
+import { App, normalizePath, TFile, TFolder } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
@@ -20,7 +20,8 @@ export class VaultAdapter {
 	async saveNote(note: BlinkoNote): Promise<string[]> {
 		const { block: attachmentBlock, storedAttachments, content } = await this.processAttachments(note);
 		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content);
-		const filePath = this.buildNotePath(note.id);
+		const filePath = this.buildNotePath(note.id, note.type);
+		await this.cleanupOtherTypeLocations(note.id, filePath);
 		await this.writeOrUpdate(filePath, markdown);
 		this.log(`Saved note ${filePath}`);
 		return storedAttachments;
@@ -74,11 +75,7 @@ export class VaultAdapter {
 	}
 
 	private generateMarkdown(note: BlinkoNote, attachmentBlock: string, attachments: string[], content: string) {
-		const tags = (note.tags ?? [])
-			.map((tag: BlinkoTag) => this.formatTag(tag?.name ?? ''))
-			.filter(Boolean);
-
-		const frontmatter = [
+		const frontmatterLines = [
 			'---',
 			`id: ${note.id}`,
 			`date: ${note.createdAt}`,
@@ -87,10 +84,15 @@ export class VaultAdapter {
 			`blinkoType: ${this.mapType(note.type)}`,
 			`blinkoTypeCode: ${typeof note.type === 'number' ? note.type : 0}`,
 			`blinkoAttachments: [${attachments.map(this.quoteAttachment).join(', ')}]`,
-			`tags: [${tags.map(this.quoteTag).join(', ')}]`,
-			'---',
-			'',
-		].join('\n');
+		];
+
+		if (this.settings.includeFrontmatterTags) {
+			const tags = this.collectTags(note.tags ?? []);
+			frontmatterLines.push(`tags: [${tags.map(this.quoteTag).join(', ')}]`);
+		}
+
+		frontmatterLines.push('---', '');
+		const frontmatter = frontmatterLines.join('\n');
 
 		const body = content ?? '';
 		return `${frontmatter}${body}${attachmentBlock}`;
@@ -98,14 +100,6 @@ export class VaultAdapter {
 
 	private sanitizeFilename(name: string): string {
 		return name.replace(/[\\/:*?"<>|]/g, '-');
-	}
-
-	private formatTag(name: string): string {
-		if (!name) {
-			return '';
-		}
-
-		return name.trim().replace(/\s*>\s*/g, '/');
 	}
 
 	private quoteTag = (tag: string): string => {
@@ -142,6 +136,64 @@ export class VaultAdapter {
 		return result;
 	}
 
+	private collectTags(rawTags: BlinkoTag[]): string[] {
+		const resolved = rawTags
+			.map((tag) => tag?.tag ?? tag)
+			.filter((tag): tag is BlinkoTag => Boolean(tag));
+		const tagMap = new Map<number, BlinkoTag>();
+		const parentsWithChildren = new Set<number>();
+
+		for (const tag of resolved) {
+			if (tag.id !== undefined) {
+				tagMap.set(tag.id, tag);
+			}
+			const parentId = typeof tag.parent === 'number' ? tag.parent : undefined;
+			if (parentId !== undefined) {
+				parentsWithChildren.add(parentId);
+			}
+		}
+
+		const unique = new Set<string>();
+		for (const tag of resolved) {
+			if (tag.id !== undefined && parentsWithChildren.has(tag.id)) {
+				continue;
+			}
+			const path = this.buildTagPath(tag, tagMap);
+			if (path) {
+				unique.add(path);
+			}
+		}
+
+		return Array.from(unique);
+	}
+
+	private buildTagPath(tag?: BlinkoTag | null, tagMap?: Map<number, BlinkoTag>): string {
+		if (!tag) {
+			return '';
+		}
+
+		const segments: string[] = [];
+		const visited = new Set<number>();
+		let current: BlinkoTag | undefined | null = tag;
+
+		while (current) {
+			const name = (current.name ?? '').trim();
+			if (name) {
+				segments.unshift(name);
+			}
+
+			const parentId = typeof current.parent === 'number' ? current.parent : undefined;
+			if (parentId && tagMap?.has(parentId) && !visited.has(parentId)) {
+				visited.add(parentId);
+				current = tagMap.get(parentId);
+			} else {
+				break;
+			}
+		}
+
+		return segments.join('/');
+	}
+
 	private escapeRegExp(input: string) {
 		return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	}
@@ -157,12 +209,28 @@ export class VaultAdapter {
 		}
 	}
 
-	private buildNotePath(id: number) {
-		const folder = this.settings.noteFolder?.trim();
+	private buildNotePath(id: number, type?: number | null) {
+		const baseFolder = this.settings.noteFolder?.trim();
+		const typeFolder = this.getTypeFolder(type);
 		const filename = `blinko-${id}.md`;
-		return folder
-			? normalizePath(`${folder}/${filename}`)
-			: normalizePath(filename);
+		const pathParts = [baseFolder, typeFolder].filter(Boolean);
+		const folderPath = pathParts.length ? normalizePath(pathParts.join('/')) : '';
+		return folderPath ? normalizePath(`${folderPath}/${filename}`) : normalizePath(filename);
+	}
+
+	private getTypeFolder(value?: number | null): string {
+		switch (value) {
+			case 1:
+				return 'Note';
+			case 2:
+				return 'Todo';
+			default:
+				return 'Flash';
+		}
+	}
+
+	private getAllTypeFolders(): string[] {
+		return ['Flash', 'Note', 'Todo'];
 	}
 
 	private buildAttachmentPath(name: string) {
@@ -177,8 +245,29 @@ export class VaultAdapter {
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) {
 			await this.app.vault.modify(existing, data);
-		} else {
+			return;
+		}
+
+		if (existing instanceof TFolder) {
+			await this.removeConflictingFolder(existing);
+		}
+
+		try {
 			await this.app.vault.create(path, data);
+		} catch (error) {
+			const fresh = this.app.vault.getAbstractFileByPath(path);
+			if (fresh instanceof TFile) {
+				await this.app.vault.modify(fresh, data);
+				return;
+			}
+
+			if (fresh instanceof TFolder && this.isExistsError(error)) {
+				await this.removeConflictingFolder(fresh);
+				await this.app.vault.create(path, data);
+				return;
+			}
+
+			throw error;
 		}
 	}
 
@@ -204,10 +293,64 @@ export class VaultAdapter {
 			currentPath = currentPath ? `${currentPath}/${segment}` : segment;
 			// eslint-disable-next-line no-await-in-loop
 			const exists = await this.app.vault.adapter.exists(currentPath);
-			if (!exists) {
+			if (exists) {
+				continue;
+			}
+
+			try {
 				// eslint-disable-next-line no-await-in-loop
 				await this.app.vault.createFolder(currentPath);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error ?? '');
+				if (!/exists/i.test(message)) {
+					throw error;
+				}
 			}
 		}
+	}
+
+	private isExistsError(error: unknown): boolean {
+		const message = error instanceof Error ? error.message : String(error ?? '');
+		return /exists/i.test(message);
+	}
+
+	private async removeConflictingFolder(folder: TFolder) {
+		this.log(`Removing folder that conflicts with Blinko note path: ${folder.path}`);
+		await this.app.vault.delete(folder);
+	}
+	private async cleanupOtherTypeLocations(id: number, targetPath: string) {
+		const candidates = [
+			...this.getAllTypeFolders().map((folder) => this.buildNotePathWithFolder(id, folder)),
+			this.buildLegacyNotePath(id),
+		].filter(Boolean);
+
+		for (const candidate of candidates) {
+			if (!candidate || candidate === targetPath) {
+				continue;
+			}
+
+			const existing = this.app.vault.getAbstractFileByPath(candidate);
+			if (existing instanceof TFile) {
+				// eslint-disable-next-line no-await-in-loop
+				await this.app.vault.delete(existing);
+			}
+		}
+	}
+
+	private buildNotePathWithFolder(id: number, folderName: string): string {
+		const baseFolder = this.settings.noteFolder?.trim();
+		const filename = `blinko-${id}.md`;
+		const folderPath = baseFolder
+			? normalizePath(`${baseFolder}/${folderName}`)
+			: normalizePath(folderName);
+		return normalizePath(`${folderPath}/${filename}`);
+	}
+
+	private buildLegacyNotePath(id: number): string {
+		const baseFolder = this.settings.noteFolder?.trim();
+		const filename = `blinko-${id}.md`;
+		return baseFolder
+			? normalizePath(`${baseFolder}/${filename}`)
+			: normalizePath(filename);
 	}
 }

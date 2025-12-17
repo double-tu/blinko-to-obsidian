@@ -6,6 +6,7 @@ export interface BlinkoSettings {
 	lastSyncTime: number;
 	autoSyncInterval: number; // minutes, 0 disabled
 	debugMode: boolean;
+	includeFrontmatterTags: boolean;
 	deleteCheckEnabled: boolean;
 	deleteCheckInterval: number;
 	deleteRecycleBinEnabled: boolean;
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: BlinkoSettings = {
 	lastSyncTime: 0,
 	autoSyncInterval: 30,
 	debugMode: false,
+	includeFrontmatterTags: true,
 	deleteCheckEnabled: false,
 	deleteCheckInterval: 120,
 	deleteRecycleBinEnabled: false,
