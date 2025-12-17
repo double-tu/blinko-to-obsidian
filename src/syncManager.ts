@@ -1,10 +1,21 @@
 import { BlinkoClient } from './client';
 import { BlinkoSettings } from './settings';
-import { BlinkoNote } from './types';
-import { VaultAdapter } from './vaultAdapter';
+import { BlinkoNote, FlashNoteJournalEntry } from './types';
+import { VaultAdapter, SavedNoteResult } from './vaultAdapter';
+import { isFlashType } from './noteUtils';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 type SaveHandler = () => Promise<void>;
+
+interface HandleNoteResult {
+	shouldContinue: boolean;
+	saveResult?: SavedNoteResult;
+}
+
+export interface SyncResult {
+	newNotes: number;
+	flashNotes: FlashNoteJournalEntry[];
+}
 
 export class SyncManager {
 	private isSyncing = false;
@@ -26,10 +37,10 @@ export class SyncManager {
 		this.settings = settings;
 	}
 
-	async startSync(): Promise<number> {
+	async startSync(): Promise<SyncResult> {
 		if (this.isSyncing) {
 			this.log('Sync already running, skipping new request.');
-			return 0;
+			return { newNotes: 0, flashNotes: [] };
 		}
 
 		if (!this.settings.serverUrl || !this.settings.accessToken) {
@@ -42,6 +53,7 @@ export class SyncManager {
 		let page = 1;
 		let hasMore = true;
 		let newNotes = 0;
+		const flashNotes: FlashNoteJournalEntry[] = [];
 
 		try {
 			while (hasMore) {
@@ -52,12 +64,19 @@ export class SyncManager {
 				}
 
 				for (const note of notes) {
-					const shouldContinue = await this.handleNote(note, lastSyncTime);
-					if (!shouldContinue) {
+					// eslint-disable-next-line no-await-in-loop
+					const result = await this.handleNote(note, lastSyncTime);
+					if (!result.shouldContinue) {
 						hasMore = false;
 						break;
 					}
-					newNotes++;
+
+					if (result.saveResult) {
+						newNotes += 1;
+						if (isFlashType(note.type)) {
+							flashNotes.push(this.buildFlashSnapshot(note, result.saveResult));
+						}
+					}
 				}
 
 				if (!hasMore || notes.length < this.pageSize) {
@@ -69,24 +88,34 @@ export class SyncManager {
 
 			this.settings.lastSyncTime = syncStartTime;
 			await this.persistSettings();
-			return newNotes;
+			return { newNotes, flashNotes };
 		} finally {
 			this.isSyncing = false;
 		}
 	}
 
-	private async handleNote(note: BlinkoNote, lastSyncTime: number): Promise<boolean> {
+	private async handleNote(note: BlinkoNote, lastSyncTime: number): Promise<HandleNoteResult> {
 		const updatedTime = Date.parse(note.updatedAt);
 		if (Number.isFinite(updatedTime) && lastSyncTime && updatedTime <= lastSyncTime) {
 			this.log(`Reached notes older than last sync: ${note.id}`);
-			return false;
+			return { shouldContinue: false };
 		}
 
-		const attachments = await this.vaultAdapter.saveNote(note);
+		const saveResult = await this.vaultAdapter.saveNote(note);
 		if (!this.settings.noteAttachmentMap) {
 			this.settings.noteAttachmentMap = {};
 		}
-		this.settings.noteAttachmentMap[String(note.id)] = attachments;
-		return true;
+		this.settings.noteAttachmentMap[String(note.id)] = saveResult.attachments;
+		return { shouldContinue: true, saveResult };
+	}
+
+	private buildFlashSnapshot(note: BlinkoNote, result: SavedNoteResult): FlashNoteJournalEntry {
+		return {
+			id: note.id,
+			createdAt: note.createdAt,
+			filePath: result.filePath,
+			blockId: result.blockId,
+			type: note.type,
+		};
 	}
 }

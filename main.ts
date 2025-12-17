@@ -1,9 +1,10 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFolder, moment } from 'obsidian';
 import { BlinkoClient } from './src/client';
 import { BlinkoSettings, DEFAULT_SETTINGS } from './src/settings';
 import { SyncManager } from './src/syncManager';
 import { VaultAdapter } from './src/vaultAdapter';
 import { DeletionManager } from './src/deletionManager';
+import { DailyNoteManager } from './src/dailyNotes';
 
 export default class BlinkoSyncPlugin extends Plugin {
 	settings: BlinkoSettings;
@@ -12,6 +13,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 	private vaultAdapter: VaultAdapter | null = null;
 	private syncManager: SyncManager | null = null;
 	private deletionManager: DeletionManager | null = null;
+	private dailyNoteManager: DailyNoteManager | null = null;
 	private statusBarItem: HTMLElement | null = null;
 	private autoSyncHandle: number | null = null;
 	private deletionIntervalHandle: number | null = null;
@@ -52,8 +54,11 @@ export default class BlinkoSyncPlugin extends Plugin {
 		this.setStatusSyncing();
 		const shouldRunDeletionCheck = this.settings.deleteCheckEnabled;
 		try {
-			const newNotes = await this.syncManager.startSync();
+			const { newNotes, flashNotes } = await this.syncManager.startSync();
 			this.setStatusIdle(this.settings.lastSyncTime || Date.now());
+			if (this.dailyNoteManager) {
+				await this.dailyNoteManager.insertFlashNotes(moment(), flashNotes);
+			}
 			new Notice(`Sync complete: ${newNotes} new notes added.`);
 			if (shouldRunDeletionCheck) {
 				await this.checkDeletedNotes(false);
@@ -125,6 +130,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 			this.persistSettingsOnly.bind(this),
 			this.logDebug,
 		);
+		this.dailyNoteManager = new DailyNoteManager(this.app, this.settings, this.logDebug);
 	}
 
 	private registerInterface() {
@@ -211,6 +217,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 		this.vaultAdapter?.updateSettings(this.settings);
 		this.syncManager?.updateSettings(this.settings);
 		this.deletionManager?.updateSettings(this.settings);
+		this.dailyNoteManager?.updateSettings(this.settings);
 		this.scheduleAutoSync();
 		this.scheduleDeletionCheck();
 		this.setStatusIdle(this.settings.lastSyncTime || undefined);
@@ -335,6 +342,8 @@ class BlinkoSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		this.renderDailyNoteSettings(containerEl);
+
 		containerEl.createEl('h3', { text: 'Deletion reconciliation (optional)' });
 
 		new Setting(containerEl)
@@ -397,6 +406,113 @@ class BlinkoSettingTab extends PluginSettingTab {
 						void this.plugin.syncNow(true);
 					}),
 			);
+	}
+
+	private renderDailyNoteSettings(containerEl: HTMLElement) {
+		containerEl.createEl('h3', { text: 'Daily Notes' });
+
+		new Setting(containerEl)
+			.setName('Insert flash notes')
+			.setDesc('When enabled, today’s Blinko flash notes are embedded between template markers in your Daily Note after each sync.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.dailyNotesToggle).onChange(async (value) => {
+					this.plugin.settings.dailyNotesToggle = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}),
+			);
+
+		if (!this.plugin.settings.dailyNotesToggle) {
+			const hint = containerEl.createEl('p', {
+				text: 'Enable the toggle above to configure the Daily Notes location, filename format, and marker boundaries.',
+			});
+			hint.addClass('setting-item-description');
+			return;
+		}
+
+		const folderSetting = new Setting(containerEl)
+			.setName('Daily Notes folder')
+			.setDesc('Folder that contains your Daily/Periodic Notes. Defaults to the vault root.');
+		folderSetting.addDropdown((dropdown) => {
+			const folders = this.getFolderOptions();
+			const currentValue = this.plugin.settings.dailyNotesLocation || '/';
+			for (const folder of folders) {
+				const label = folder === '/' ? 'Vault root (/)' : folder;
+				dropdown.addOption(folder, label);
+			}
+			if (!folders.includes(currentValue)) {
+				dropdown.addOption(currentValue, currentValue);
+			}
+			dropdown.setValue(currentValue).onChange(async (value) => {
+				this.plugin.settings.dailyNotesLocation = value || '/';
+				await this.plugin.saveSettings();
+			});
+		});
+
+		new Setting(containerEl)
+			.setName('Daily note format')
+			.setDesc('Moment.js format used to generate the filename (e.g., YYYY-MM-DD or YYYY/[W]ww/YYYY-MM-DD).')
+			.addText((text) =>
+				text
+					.setPlaceholder('YYYY-MM-DD')
+					.setValue(this.plugin.settings.dailyNotesFormat || 'YYYY-MM-DD')
+					.onChange(async (value) => {
+						this.plugin.settings.dailyNotesFormat = value.trim() || 'YYYY-MM-DD';
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Start marker')
+			.setDesc('Exact line that marks where flash notes begin (will be replaced on each sync).')
+			.addText((text) =>
+				text
+					.setPlaceholder('<!-- start of flash-notes -->')
+					.setValue(this.plugin.settings.dailyNotesInsertAfter)
+					.onChange(async (value) => {
+						this.plugin.settings.dailyNotesInsertAfter = value || '<!-- start of flash-notes -->';
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('End marker')
+			.setDesc('Exact line that marks where flash notes end.')
+			.addText((text) =>
+				text
+					.setPlaceholder('<!-- end of flash-notes -->')
+					.setValue(this.plugin.settings.dailyNotesInsertBefore)
+					.onChange(async (value) => {
+						this.plugin.settings.dailyNotesInsertBefore = value || '<!-- end of flash-notes -->';
+						await this.plugin.saveSettings();
+					}),
+			);
+	}
+
+	private getFolderOptions(): string[] {
+		const root = this.app.vault.getRoot();
+		if (!root) {
+			return ['/'];
+		}
+
+		const folders = new Set<string>(['/']);
+		const stack: TFolder[] = [root];
+		while (stack.length) {
+			const folder = stack.pop();
+			if (!folder) {
+				continue;
+			}
+			const normalized = folder.path && folder.path !== '/' ? folder.path : '/';
+			folders.add(normalized);
+
+			for (const child of folder.children) {
+				if (child instanceof TFolder) {
+					stack.push(child);
+				}
+			}
+		}
+
+		return Array.from(folders).sort((a, b) => a.localeCompare(b));
 	}
 
 	private getLastSyncDescription() {

@@ -23,3 +23,11 @@ export interface BlinkoNote {
 	tags?: BlinkoTag[];
 	attachments?: BlinkoAttachment[];
 }
+
+export interface FlashNoteJournalEntry {
+	id: number;
+	createdAt: string;
+	filePath: string;
+	blockId: string;
+	type?: number | null;
+}

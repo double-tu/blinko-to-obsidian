@@ -2,8 +2,15 @@ import { App, normalizePath, TFile, TFolder } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
+import { buildBlinkoBlockId } from './noteUtils';
 
 type Logger = (message: string, ...values: unknown[]) => void;
+
+export interface SavedNoteResult {
+	attachments: string[];
+	filePath: string;
+	blockId: string;
+}
 
 export class VaultAdapter {
 	constructor(
@@ -17,14 +24,19 @@ export class VaultAdapter {
 		this.settings = settings;
 	}
 
-	async saveNote(note: BlinkoNote): Promise<string[]> {
+	async saveNote(note: BlinkoNote): Promise<SavedNoteResult> {
 		const { block: attachmentBlock, storedAttachments, content } = await this.processAttachments(note);
-		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content);
+		const blockId = buildBlinkoBlockId(note.id);
+		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content, blockId);
 		const filePath = this.buildNotePath(note.id, note.type);
 		await this.cleanupOtherTypeLocations(note.id, filePath);
 		await this.writeOrUpdate(filePath, markdown);
 		this.log(`Saved note ${filePath}`);
-		return storedAttachments;
+		return {
+			attachments: storedAttachments,
+			filePath,
+			blockId,
+		};
 	}
 
 	private async processAttachments(note: BlinkoNote): Promise<{ block: string; storedAttachments: string[]; content: string }> {
@@ -74,7 +86,13 @@ export class VaultAdapter {
 		return { block, storedAttachments, content };
 	}
 
-	private generateMarkdown(note: BlinkoNote, attachmentBlock: string, attachments: string[], content: string) {
+	private generateMarkdown(
+		note: BlinkoNote,
+		attachmentBlock: string,
+		attachments: string[],
+		content: string,
+		blockId: string,
+	) {
 		const frontmatterLines = [
 			'---',
 			`id: ${note.id}`,
@@ -95,7 +113,9 @@ export class VaultAdapter {
 		const frontmatter = frontmatterLines.join('\n');
 
 		const body = content ?? '';
-		return `${frontmatter}${body}${attachmentBlock}`;
+		const composedBody = `${body}${attachmentBlock}`;
+		const bodyWithMarker = this.ensureBlockId(composedBody, blockId);
+		return `${frontmatter}${bodyWithMarker}`;
 	}
 
 	private sanitizeFilename(name: string): string {
@@ -352,5 +372,34 @@ export class VaultAdapter {
 		return baseFolder
 			? normalizePath(`${baseFolder}/${filename}`)
 			: normalizePath(filename);
+	}
+
+	private ensureBlockId(content: string, blockId: string): string {
+		if (!blockId) {
+			return content;
+		}
+
+		const marker = `^${blockId}`;
+		const normalized = content.replace(/\r\n/g, '\n');
+		const trimmed = normalized.trim();
+		if (!trimmed.length) {
+			return `${marker}\n`;
+		}
+
+		if (normalized.includes(marker)) {
+			return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+		}
+
+		const lines = normalized.split('\n');
+		for (let index = lines.length - 1; index >= 0; index -= 1) {
+			const line = lines[index];
+			if (!line || !line.trim().length) {
+				continue;
+			}
+			lines[index] = `${line} ${marker}`;
+			return `${lines.join('\n')}\n`;
+		}
+
+		return `${normalized} ${marker}\n`;
 	}
 }

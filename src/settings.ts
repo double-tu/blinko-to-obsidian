@@ -3,6 +3,11 @@ export interface BlinkoSettings {
 	accessToken: string;
 	noteFolder: string;
 	attachmentFolder: string;
+	dailyNotesToggle: boolean;
+	dailyNotesLocation: string;
+	dailyNotesFormat: string;
+	dailyNotesInsertAfter: string;
+	dailyNotesInsertBefore: string;
 	lastSyncTime: number;
 	autoSyncInterval: number; // minutes, 0 disabled
 	debugMode: boolean;
@@ -18,6 +23,11 @@ export const DEFAULT_SETTINGS: BlinkoSettings = {
 	accessToken: '',
 	noteFolder: 'Blinko/Notes',
 	attachmentFolder: 'Blinko/Attachments',
+	dailyNotesToggle: false,
+	dailyNotesLocation: '/',
+	dailyNotesFormat: 'YYYY-MM-DD',
+	dailyNotesInsertAfter: '<!-- start of flash-notes -->',
+	dailyNotesInsertBefore: '<!-- end of flash-notes -->',
 	lastSyncTime: 0,
 	autoSyncInterval: 30,
 	debugMode: false,
