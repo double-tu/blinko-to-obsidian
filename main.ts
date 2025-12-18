@@ -5,11 +5,13 @@ import { SyncManager } from './src/syncManager';
 import { VaultAdapter } from './src/vaultAdapter';
 import { DeletionManager } from './src/deletionManager';
 import { DailyNoteManager } from './src/dailyNotes';
+import { AiTitleService } from './src/aiTitleService';
 
 export default class BlinkoSyncPlugin extends Plugin {
 	settings: BlinkoSettings;
 
 	private client: BlinkoClient | null = null;
+	private aiTitleService: AiTitleService | null = null;
 	private vaultAdapter: VaultAdapter | null = null;
 	private syncManager: SyncManager | null = null;
 	private deletionManager: DeletionManager | null = null;
@@ -115,7 +117,8 @@ export default class BlinkoSyncPlugin extends Plugin {
 
 	private initializeServices() {
 		this.client = new BlinkoClient(this.settings);
-		this.vaultAdapter = new VaultAdapter(this.app, this.settings, this.client, this.logDebug);
+		this.aiTitleService = new AiTitleService(this.settings, this.logDebug);
+		this.vaultAdapter = new VaultAdapter(this.app, this.settings, this.client, this.aiTitleService, this.logDebug);
 		this.syncManager = new SyncManager(
 			this.settings,
 			this.client,
@@ -214,6 +217,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 
 	private onSettingsUpdated() {
 		this.client?.updateSettings(this.settings);
+		this.aiTitleService?.updateSettings(this.settings);
 		this.vaultAdapter?.updateSettings(this.settings);
 		this.syncManager?.updateSettings(this.settings);
 		this.deletionManager?.updateSettings(this.settings);
@@ -363,6 +367,7 @@ class BlinkoSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		this.renderAiTitleSettings(containerEl);
 		this.renderDailyNoteSettings(containerEl);
 
 		containerEl.createEl('h3', { text: 'Deletion reconciliation (optional)' });
@@ -427,6 +432,101 @@ class BlinkoSettingTab extends PluginSettingTab {
 						void this.plugin.syncNow(true);
 					}),
 			);
+	}
+
+	private renderAiTitleSettings(containerEl: HTMLElement) {
+		containerEl.createEl('h3', { text: 'AI title generation' });
+
+		new Setting(containerEl)
+			.setName('Enable AI-generated titles')
+			.setDesc('Call an OpenAI-compatible API to suggest semantic titles when notes lack one.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.aiTitleEnabled).onChange(async (value) => {
+					this.plugin.settings.aiTitleEnabled = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('API base URL')
+			.setDesc('Example: https://api.openai.com/v1')
+			.addText((text) =>
+				text
+					.setPlaceholder('https://api.openai.com/v1')
+					.setValue(this.plugin.settings.aiBaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.aiBaseUrl = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('API key')
+			.setDesc('Bearer token used for the AI endpoint')
+			.addText((text) => {
+				text.inputEl.type = 'password';
+				text
+					.setPlaceholder('sk-...')
+					.setValue(this.plugin.settings.aiApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.aiApiKey = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Model name')
+			.setDesc('Model identifier, e.g., gpt-5.1-mini or gpt-4o-mini')
+			.addText((text) =>
+				text
+					.setPlaceholder('gpt-5.1-mini')
+					.setValue(this.plugin.settings.aiModelName)
+					.onChange(async (value) => {
+						this.plugin.settings.aiModelName = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Max tokens')
+			.setDesc('Upper bound for the generated title length (tokens).')
+			.addText((text) => {
+				text.inputEl.type = 'number';
+				text.inputEl.min = '1';
+				text
+					.setValue(String(this.plugin.settings.aiMaxTokens || 50))
+					.onChange(async (value) => {
+						const parsed = Number(value);
+						this.plugin.settings.aiMaxTokens = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 50;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Concurrency limit')
+			.setDesc('Maximum simultaneous AI requests when syncing multiple notes.')
+			.addText((text) => {
+				text.inputEl.type = 'number';
+				text.inputEl.min = '1';
+				text
+					.setValue(String(this.plugin.settings.aiConcurrency || 3))
+					.onChange(async (value) => {
+						const parsed = Number(value);
+						this.plugin.settings.aiConcurrency = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		const promptSetting = new Setting(containerEl)
+			.setName('System prompt')
+			.setDesc('Customize the instruction sent to the AI model.');
+		promptSetting.addTextArea((text) => {
+			text.inputEl.rows = 4;
+			text.setValue(this.plugin.settings.aiSystemPrompt).onChange(async (value) => {
+				this.plugin.settings.aiSystemPrompt = value;
+				await this.plugin.saveSettings();
+			});
+		});
 	}
 
 	private renderDailyNoteSettings(containerEl: HTMLElement) {

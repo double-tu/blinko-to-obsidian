@@ -2,6 +2,7 @@ import { App, normalizePath, TFile, TFolder, moment } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
+import { AiTitleService } from './aiTitleService';
 import { getCachedBlinkoFrontmatter, isBlinkoSourceValue, resolveBlinkoFrontmatter } from './noteMetadata';
 
 type Logger = (message: string, ...values: unknown[]) => void;
@@ -19,19 +20,22 @@ export class VaultAdapter {
 		private app: App,
 		private settings: BlinkoSettings,
 		private client: BlinkoClient,
+		private aiTitleService: AiTitleService,
 		private log: Logger,
 	) {}
 
 	updateSettings(settings: BlinkoSettings) {
 		this.settings = settings;
+		this.aiTitleService.updateSettings(settings);
 		this.notePathIndex = null;
 		this.notePathIndexPromise = null;
 	}
 
 	async saveNote(note: BlinkoNote): Promise<SavedNoteResult> {
 		const { block: attachmentBlock, storedAttachments, content } = await this.processAttachments(note);
+		const finalTitle = await this.resolveNoteTitle(note, content);
 		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content);
-		const filePath = this.buildNotePath(note, content);
+		const filePath = this.buildNotePath(note, content, finalTitle);
 		const existingFile = await this.findExistingNoteFile(note.id);
 		if (existingFile && existingFile.path !== filePath) {
 			await this.ensureFolderForFile(filePath);
@@ -235,9 +239,9 @@ export class VaultAdapter {
 		}
 	}
 
-	private buildNotePath(note: BlinkoNote, content: string): string {
+	private buildNotePath(note: BlinkoNote, content: string, explicitTitle?: string | null): string {
 		const template = (this.settings.notePathTemplate || '{{typeFolder}}/blinko-{{id}}').trim();
-		const rendered = this.renderTemplate(template, note, content);
+		const rendered = this.renderTemplate(template, note, content, explicitTitle);
 		const sanitized = this.sanitizeTemplateOutput(rendered, note.id);
 		const requiresId = this.templateIncludesId(template);
 		const ensured = requiresId ? sanitized : this.appendIdFallback(sanitized, note.id);
@@ -248,18 +252,18 @@ export class VaultAdapter {
 		return normalizePath(`${fullPath}.md`);
 	}
 
-	private renderTemplate(template: string, note: BlinkoNote, content: string): string {
+	private renderTemplate(template: string, note: BlinkoNote, content: string, explicitTitle?: string | null): string {
 		const normalized = template.trim();
 		if (!normalized.length) {
 			return `blinko-${note.id}`;
 		}
 
 		return normalized.replace(/{{\s*([^}]+)\s*}}/g, (_match, token: string) =>
-			this.resolveTemplateToken(String(token ?? ''), note, content),
+			this.resolveTemplateToken(String(token ?? ''), note, content, explicitTitle),
 		);
 	}
 
-	private resolveTemplateToken(token: string, note: BlinkoNote, content: string): string {
+	private resolveTemplateToken(token: string, note: BlinkoNote, content: string, explicitTitle?: string | null): string {
 		const [rawName, rawFormat] = token.split(':', 2);
 		const name = (rawName || '').trim();
 		const format = (rawFormat || '').trim();
@@ -273,7 +277,7 @@ export class VaultAdapter {
 				return this.getTypeFolder(note.type);
 			case 'title':
 			case 'aiTitle':
-				return this.extractNoteTitle(note, content);
+				return this.resolveTemplateTitle(note, content, explicitTitle);
 			case 'created':
 				return this.formatTemplateDate(note.createdAt, format);
 			case 'updated':
@@ -317,6 +321,31 @@ export class VaultAdapter {
 		}
 
 		return '';
+	}
+
+	private async resolveNoteTitle(note: BlinkoNote, content: string): Promise<string> {
+		const existing = (note.title ?? '').trim();
+		if (existing.length) {
+			return existing;
+		}
+
+		if (this.aiTitleService.isEnabled()) {
+			const generated = await this.aiTitleService.getTitle(note, content);
+			if (generated?.trim().length) {
+				this.log(`AI generated title for note ${note.id}: ${generated}`);
+				return generated.trim();
+			}
+		}
+
+		return this.extractNoteTitle(note, content);
+	}
+
+	private resolveTemplateTitle(note: BlinkoNote, content: string, explicitTitle?: string | null): string {
+		const resolved = (explicitTitle ?? '').trim();
+		if (resolved.length) {
+			return resolved;
+		}
+		return this.extractNoteTitle(note, content);
 	}
 
 	private sanitizeTemplateOutput(raw: string, noteId: number): string {
