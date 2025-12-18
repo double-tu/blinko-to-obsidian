@@ -42,7 +42,7 @@ class ConcurrencyLimiter {
 }
 
 const FALLBACK_SYSTEM_PROMPT =
-	'你是一个专业的笔记标题生成助手。请根据提供的笔记内容、标签和时间信息，生成一个简洁、概括性强的标题。标题不要包含特殊字符，不要使用引号，长度控制在15字以内。';
+	'You are a professional note title generation assistant. Please generate a concise and highly descriptive title based on the provided note content, tags, and time information. The title should not contain special characters or quotation marks, and its length should be limited to 15 words or less.';
 
 export class AiTitleService {
 	private limiter: ConcurrencyLimiter;
