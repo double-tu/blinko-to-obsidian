@@ -22,6 +22,13 @@ interface MarkerSearchResult {
 	matchType: MarkerMatchType;
 }
 
+interface MarkerBounds {
+	startIndex: number;
+	endIndex: number;
+	normalizedStart: string;
+	normalizedEnd: string;
+}
+
 export class DailyNoteManager {
 	private readonly dateKeyFormat = 'YYYYMMDD';
 
@@ -56,6 +63,47 @@ export class DailyNoteManager {
 		for (const target of targets) {
 			await this.insertFlashNotesForDate(target, newNotes);
 		}
+	}
+
+	async removeReferenceForFile(file: TFile): Promise<boolean> {
+		if (!this.settings.dailyNotesToggle) {
+			return false;
+		}
+
+		const createdAt = this.resolveCreatedAt(file);
+		const createdMoment = moment(createdAt);
+		if (!createdMoment.isValid()) {
+			return false;
+		}
+
+		const targetDate = createdMoment.clone().startOf('day');
+		const displayDate = targetDate.format('YYYY-MM-DD');
+		const dailyNotePath = this.getDailyNotePath(targetDate);
+		if (!dailyNotePath) {
+			return false;
+		}
+
+		const dailyNote = this.getExistingDailyNote(dailyNotePath);
+		if (!dailyNote) {
+			this.log(
+				'Daily Notes: no existing note found at %s for %s while removing reference to %s.',
+				dailyNotePath,
+				displayDate,
+				file.path,
+			);
+			return false;
+		}
+
+		const content = await this.app.vault.read(dailyNote);
+		const { updatedContent, removed } = this.removeReferenceFromContent(dailyNote.path, content, file.path);
+		if (!removed) {
+			this.log('Daily Notes: reference to %s not found in %s.', file.path, dailyNote.path);
+			return false;
+		}
+
+		await this.app.vault.modify(dailyNote, updatedContent);
+		this.log('Daily Notes: removed reference to %s from %s for %s.', file.path, dailyNote.path, displayDate);
+		return true;
 	}
 
 	private collectTargetDates(newNotes: FlashNoteJournalEntry[]): moment.Moment[] {
@@ -261,20 +309,88 @@ export class DailyNoteManager {
 	}
 
 	private replaceRegion(filePath: string, content: string, payload: string): string {
+		const lines = content.replace(/\r\n/g, '\n').split('\n');
+		const bounds = this.resolveMarkerBounds(filePath, lines);
+		this.log(
+			'Daily Notes: replacing content between markers (%s -> %s) in %s.',
+			`line ${bounds.startIndex + 1}`,
+			`line ${bounds.endIndex + 1}`,
+			filePath,
+		);
+
+		const before = lines.slice(0, bounds.startIndex + 1);
+		const after = lines.slice(bounds.endIndex);
+		const payloadLines = payload ? payload.replace(/\r\n/g, '\n').split('\n') : [];
+		const merged = [...before, ...payloadLines, ...after];
+		return merged.join('\n');
+	}
+
+	private removeReferenceFromContent(
+		filePath: string,
+		content: string,
+		targetFilePath: string,
+	): { updatedContent: string; removed: boolean } {
+		const lines = content.replace(/\r\n/g, '\n').split('\n');
+		let bounds: MarkerBounds;
+		try {
+			bounds = this.resolveMarkerBounds(filePath, lines);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error ?? '');
+			this.log('Daily Notes: %s. Skipping reference cleanup for %s.', reason, filePath);
+			return { updatedContent: content, removed: false };
+		}
+
+		const regionStart = bounds.startIndex + 1;
+		const regionEnd = bounds.endIndex;
+		if (regionStart >= regionEnd) {
+			return { updatedContent: content, removed: false };
+		}
+
+		const linkTarget = this.toLinkPath(targetFilePath);
+		const referenceRegex = this.buildReferenceRegex(linkTarget);
+		let removed = false;
+		const regionLines = lines.slice(regionStart, regionEnd);
+		const filtered = regionLines.filter((line) => {
+			if (!referenceRegex.test(line)) {
+				return true;
+			}
+			removed = true;
+			return false;
+		});
+
+		if (!removed) {
+			return { updatedContent: content, removed: false };
+		}
+
+		const hasReferences = filtered.some((line) => line.trim().startsWith('>'));
+		const normalizedRegion = hasReferences ? filtered : [];
+		const before = lines.slice(0, regionStart);
+		const after = lines.slice(regionEnd);
+		const updatedLines = [...before, ...normalizedRegion, ...after];
+		return { updatedContent: updatedLines.join('\n'), removed: true };
+	}
+
+	private resolveMarkerBounds(filePath: string, lines: string[]): MarkerBounds {
 		const startMarker = (this.settings.dailyNotesInsertAfter || '').trim();
 		const endMarker = (this.settings.dailyNotesInsertBefore || '').trim();
 
 		const normalizedStart = startMarker || '<!-- start of flash-notes -->';
 		const normalizedEnd = endMarker || '<!-- end of flash-notes -->';
 
-		const lines = content.replace(/\r\n/g, '\n').split('\n');
 		const startLookup = this.findMarkerIndex(lines, normalizedStart);
 		if (!startLookup) {
 			this.logMissingMarker(filePath, 'start', normalizedStart, lines, 0);
 			throw new Error(`Daily Notes start marker not found: "${normalizedStart}"`);
 		}
 
-		this.logMarkerMatch(filePath, 'start', normalizedStart, startLookup.index + 1, startLookup.matchType, lines[startLookup.index]);
+		this.logMarkerMatch(
+			filePath,
+			'start',
+			normalizedStart,
+			startLookup.index + 1,
+			startLookup.matchType,
+			lines[startLookup.index],
+		);
 
 		const afterStartIndex = startLookup.index + 1;
 		const trailingLines = lines.slice(afterStartIndex);
@@ -294,18 +410,12 @@ export class DailyNoteManager {
 			lines[absoluteEndIndex],
 		);
 
-		this.log(
-			'Daily Notes: replacing content between markers (%s -> %s) in %s.',
-			`line ${startLookup.index + 1}`,
-			`line ${absoluteEndIndex + 1}`,
-			filePath,
-		);
-
-		const before = lines.slice(0, startLookup.index + 1);
-		const after = lines.slice(absoluteEndIndex);
-		const payloadLines = payload ? payload.replace(/\r\n/g, '\n').split('\n') : [];
-		const merged = [...before, ...payloadLines, ...after];
-		return merged.join('\n');
+		return {
+			startIndex: startLookup.index,
+			endIndex: absoluteEndIndex,
+			normalizedStart,
+			normalizedEnd,
+		};
 	}
 
 	private getExistingDailyNote(path: string): TFile | null {
@@ -396,6 +506,15 @@ export class DailyNoteManager {
 	private getTimestamp(value: string): number {
 		const ms = Date.parse(value);
 		return Number.isFinite(ms) ? ms : 0;
+	}
+
+	private buildReferenceRegex(linkTarget: string): RegExp {
+		const escaped = this.escapeRegExp(linkTarget);
+		return new RegExp(`!?\\[\\[${escaped}(?:\\|[^\\]]*)?\\]\\]`);
+	}
+
+	private escapeRegExp(value: string): string {
+		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	}
 
 	private findMarkerIndex(lines: string[], marker: string): MarkerSearchResult | null {

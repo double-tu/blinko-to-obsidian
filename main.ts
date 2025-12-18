@@ -119,6 +119,7 @@ export default class BlinkoSyncPlugin extends Plugin {
 		this.client = new BlinkoClient(this.settings);
 		this.aiTitleService = new AiTitleService(this.settings, this.logDebug);
 		this.vaultAdapter = new VaultAdapter(this.app, this.settings, this.client, this.aiTitleService, this.logDebug);
+		this.dailyNoteManager = new DailyNoteManager(this.app, this.settings, this.logDebug);
 		this.syncManager = new SyncManager(
 			this.settings,
 			this.client,
@@ -132,8 +133,8 @@ export default class BlinkoSyncPlugin extends Plugin {
 			this.client,
 			this.persistSettingsOnly.bind(this),
 			this.logDebug,
+			this.dailyNoteManager,
 		);
-		this.dailyNoteManager = new DailyNoteManager(this.app, this.settings, this.logDebug);
 	}
 
 	private registerInterface() {

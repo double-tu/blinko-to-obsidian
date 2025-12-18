@@ -2,6 +2,7 @@ import { App, normalizePath, TFile } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoClient } from './client';
 import { getCachedBlinkoFrontmatter, isBlinkoSourceValue, resolveBlinkoFrontmatter } from './noteMetadata';
+import { DailyNoteManager } from './dailyNotes';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 type SaveHandler = () => Promise<void>;
@@ -20,6 +21,7 @@ export class DeletionManager {
 		private client: BlinkoClient,
 		private persistSettings: SaveHandler,
 		private log: Logger,
+		private dailyNoteManager?: DailyNoteManager,
 	) {}
 
 	updateSettings(settings: BlinkoSettings) {
@@ -143,8 +145,22 @@ export class DeletionManager {
 	private async deleteNote(entry: NoteFileEntry) {
 		const attachments = await this.getAttachmentsFor(entry);
 		this.log(`Removing local note ${entry.file.path} because it no longer exists in Blinko.`);
+		await this.removeDailyNoteReference(entry.file);
 		await this.app.vault.delete(entry.file);
 		await this.deleteAttachments(entry.id, attachments);
+	}
+
+	private async removeDailyNoteReference(file: TFile): Promise<void> {
+		if (!this.dailyNoteManager) {
+			return;
+		}
+
+		try {
+			await this.dailyNoteManager.removeReferenceForFile(file);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error ?? '');
+			this.log('Daily Notes: failed to remove reference for %s: %s', file.path, reason);
+		}
 	}
 
 	private async deleteAttachments(noteId: number, attachments?: string[]) {
