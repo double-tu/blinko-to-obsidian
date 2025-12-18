@@ -1,6 +1,7 @@
 import { App, normalizePath, TFile } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoClient } from './client';
+import { getCachedBlinkoFrontmatter, isBlinkoSourceValue, resolveBlinkoFrontmatter } from './noteMetadata';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 type SaveHandler = () => Promise<void>;
@@ -33,7 +34,7 @@ export class DeletionManager {
 
 		this.isRunning = true;
 			try {
-				const entries = this.collectNoteFiles();
+				const entries = await this.collectNoteFiles();
 				if (!entries.length) {
 					return 0;
 				}
@@ -75,29 +76,36 @@ export class DeletionManager {
 			}
 		}
 
-	private collectNoteFiles(): NoteFileEntry[] {
-		const folder = this.settings.noteFolder?.trim();
-		const normalizedFolder = folder ? normalizePath(folder) : '';
-		const prefix = normalizedFolder ? `${normalizedFolder}/` : '';
+	private async collectNoteFiles(): Promise<NoteFileEntry[]> {
+		const normalizedFolder = this.normalizeFolder(this.settings.noteFolder);
 		const files = this.app.vault.getFiles();
 		const entries: NoteFileEntry[] = [];
 
 		for (const file of files) {
-			if (normalizedFolder && !file.path.startsWith(prefix)) {
+			const cached = getCachedBlinkoFrontmatter(this.app, file);
+			const baseCandidate = this.isCandidateFile(file.path, normalizedFolder, cached?.source ?? null);
+			if (!baseCandidate && normalizedFolder) {
 				continue;
 			}
 
-			const match = file.name.match(/^blinko-(\d+)\.md$/);
-			if (!match) {
+			let meta = cached;
+			if (!baseCandidate && !normalizedFolder) {
+				// eslint-disable-next-line no-await-in-loop
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			} else if (!meta?.id) {
+				// eslint-disable-next-line no-await-in-loop
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			}
+
+			if (!meta?.id) {
 				continue;
 			}
 
-			const id = Number(match[1]);
-			if (Number.isNaN(id)) {
+			if (!this.isCandidateFile(file.path, normalizedFolder, meta.source ?? null)) {
 				continue;
 			}
 
-			entries.push({ id, file });
+			entries.push({ id: meta.id, file });
 		}
 
 		return entries;
@@ -302,5 +310,32 @@ export class DeletionManager {
 
 	private shouldDeleteRecycledNotes(): boolean {
 		return Boolean(this.settings.deleteRecycleBinEnabled);
+	}
+
+	private normalizeFolder(input?: string): string {
+		const trimmed = (input ?? '').trim();
+		if (!trimmed || trimmed === '/' || trimmed === '.') {
+			return '';
+		}
+		return normalizePath(trimmed);
+	}
+
+	private isCandidateFile(filePath: string, normalizedFolder: string, source?: string | null): boolean {
+		if (normalizedFolder && this.pathWithinFolder(filePath, normalizedFolder)) {
+			return true;
+		}
+		return isBlinkoSourceValue(source);
+	}
+
+	private pathWithinFolder(filePath: string, folder: string): boolean {
+		if (!folder) {
+			return true;
+		}
+
+		if (filePath === folder) {
+			return true;
+		}
+
+		return filePath.startsWith(`${folder}/`);
 	}
 }

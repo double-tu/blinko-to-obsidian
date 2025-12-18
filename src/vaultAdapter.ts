@@ -2,6 +2,7 @@ import { App, normalizePath, TFile, TFolder, moment } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
+import { getCachedBlinkoFrontmatter, isBlinkoSourceValue, resolveBlinkoFrontmatter } from './noteMetadata';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 
@@ -11,6 +12,9 @@ export interface SavedNoteResult {
 }
 
 export class VaultAdapter {
+	private notePathIndex: Map<number, string> | null = null;
+	private notePathIndexPromise: Promise<Map<number, string>> | null = null;
+
 	constructor(
 		private app: App,
 		private settings: BlinkoSettings,
@@ -20,14 +24,21 @@ export class VaultAdapter {
 
 	updateSettings(settings: BlinkoSettings) {
 		this.settings = settings;
+		this.notePathIndex = null;
+		this.notePathIndexPromise = null;
 	}
 
 	async saveNote(note: BlinkoNote): Promise<SavedNoteResult> {
 		const { block: attachmentBlock, storedAttachments, content } = await this.processAttachments(note);
 		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content);
-		const filePath = this.buildNotePath(note.id, note.type);
-		await this.cleanupOtherTypeLocations(note.id, filePath);
+		const filePath = this.buildNotePath(note, content);
+		const existingFile = await this.findExistingNoteFile(note.id);
+		if (existingFile && existingFile.path !== filePath) {
+			await this.ensureFolderForFile(filePath);
+			await this.app.vault.rename(existingFile, filePath);
+		}
 		await this.writeOrUpdate(filePath, markdown);
+		this.registerNotePath(note.id, filePath);
 		this.log(`Saved note ${filePath}`);
 		return {
 			attachments: storedAttachments,
@@ -224,13 +235,127 @@ export class VaultAdapter {
 		}
 	}
 
-	private buildNotePath(id: number, type?: number | null) {
-		const baseFolder = this.settings.noteFolder?.trim();
-		const typeFolder = this.getTypeFolder(type);
-		const filename = `blinko-${id}.md`;
-		const pathParts = [baseFolder, typeFolder].filter(Boolean);
-		const folderPath = pathParts.length ? normalizePath(pathParts.join('/')) : '';
-		return folderPath ? normalizePath(`${folderPath}/${filename}`) : normalizePath(filename);
+	private buildNotePath(note: BlinkoNote, content: string): string {
+		const template = (this.settings.notePathTemplate || '{{typeFolder}}/blinko-{{id}}').trim();
+		const rendered = this.renderTemplate(template, note, content);
+		const sanitized = this.sanitizeTemplateOutput(rendered, note.id);
+		const requiresId = this.templateIncludesId(template);
+		const ensured = requiresId ? sanitized : this.appendIdFallback(sanitized, note.id);
+		const folder = this.normalizeFolder(this.settings.noteFolder);
+		const hasExtension = ensured.toLowerCase().endsWith('.md');
+		const relative = hasExtension ? ensured.slice(0, -3) : ensured;
+		const fullPath = folder ? `${folder}/${relative}` : relative;
+		return normalizePath(`${fullPath}.md`);
+	}
+
+	private renderTemplate(template: string, note: BlinkoNote, content: string): string {
+		const normalized = template.trim();
+		if (!normalized.length) {
+			return `blinko-${note.id}`;
+		}
+
+		return normalized.replace(/{{\s*([^}]+)\s*}}/g, (_match, token: string) =>
+			this.resolveTemplateToken(String(token ?? ''), note, content),
+		);
+	}
+
+	private resolveTemplateToken(token: string, note: BlinkoNote, content: string): string {
+		const [rawName, rawFormat] = token.split(':', 2);
+		const name = (rawName || '').trim();
+		const format = (rawFormat || '').trim();
+
+		switch (name) {
+			case 'id':
+				return String(note.id);
+			case 'type':
+				return this.mapType(note.type);
+			case 'typeFolder':
+				return this.getTypeFolder(note.type);
+			case 'title':
+			case 'aiTitle':
+				return this.extractNoteTitle(note, content);
+			case 'created':
+				return this.formatTemplateDate(note.createdAt, format);
+			case 'updated':
+				return this.formatTemplateDate(note.updatedAt, format);
+			default:
+				return '';
+		}
+	}
+
+	private templateIncludesId(template: string): boolean {
+		return /{{\s*id\s*}}/i.test(template);
+	}
+
+	private formatTemplateDate(value?: string | null, format?: string): string {
+		if (!value) {
+			return '';
+		}
+
+		const parsed = moment(value);
+		if (!parsed.isValid()) {
+			return '';
+		}
+
+		const pattern = format?.length ? format : 'YYYY-MM-DD';
+		return parsed.local().format(pattern);
+	}
+
+	private extractNoteTitle(note: BlinkoNote, content: string): string {
+		const fromNote = (note.title ?? '').trim();
+		if (fromNote.length) {
+			return fromNote;
+		}
+
+		const normalized = (content ?? '').replace(/\r\n/g, '\n');
+		const lines = normalized.split('\n');
+		for (const line of lines) {
+			const cleaned = line.replace(/^#+\s*/, '').trim();
+			if (cleaned.length) {
+				return cleaned;
+			}
+		}
+
+		return '';
+	}
+
+	private sanitizeTemplateOutput(raw: string, noteId: number): string {
+		const trimmed = (raw || '').trim();
+		const withoutExt = trimmed.toLowerCase().endsWith('.md') ? trimmed.slice(0, -3) : trimmed;
+		const segments = withoutExt
+			.split('/')
+			.map((segment) => this.sanitizePathSegment(segment))
+			.filter(Boolean);
+
+		if (!segments.length) {
+			return `blinko-${noteId}`;
+		}
+
+		return segments.join('/');
+	}
+
+	private sanitizePathSegment(segment: string): string {
+		const trimmed = (segment ?? '').trim();
+		if (!trimmed.length) {
+			return '';
+		}
+
+		const sanitized = this.sanitizeFilename(trimmed).replace(/\s+/g, ' ');
+		return sanitized.trim();
+	}
+
+	private appendIdFallback(path: string, id: number): string {
+		const normalized = (path ?? '').trim();
+		if (!normalized.length) {
+			return `blinko-${id}`;
+		}
+
+		const segments = normalized.split('/');
+		const last = segments.pop() ?? '';
+		const suffix = `blinko-${id}`;
+		const nextLast = last ? `${last}-${suffix}` : suffix;
+		segments.push(nextLast);
+		return segments.join('/');
 	}
 
 	private getTypeFolder(value?: number | null): string {
@@ -242,10 +367,6 @@ export class VaultAdapter {
 			default:
 				return 'Flash';
 		}
-	}
-
-	private getAllTypeFolders(): string[] {
-		return ['Flash', 'Note', 'Todo'];
 	}
 
 	private buildAttachmentPath(name: string) {
@@ -333,40 +454,124 @@ export class VaultAdapter {
 		this.log(`Removing folder that conflicts with Blinko note path: ${folder.path}`);
 		await this.app.vault.delete(folder);
 	}
-	private async cleanupOtherTypeLocations(id: number, targetPath: string) {
-		const candidates = [
-			...this.getAllTypeFolders().map((folder) => this.buildNotePathWithFolder(id, folder)),
-			this.buildLegacyNotePath(id),
-		].filter(Boolean);
+	private normalizeFolder(input?: string): string {
+		const trimmed = (input ?? '').trim();
+		if (!trimmed || trimmed === '/' || trimmed === '.') {
+			return '';
+		}
+		return normalizePath(trimmed);
+	}
 
-		for (const candidate of candidates) {
-			if (!candidate || candidate === targetPath) {
+	private registerNotePath(id: number, path: string) {
+		if (!this.notePathIndex) {
+			return;
+		}
+		this.notePathIndex.set(id, path);
+	}
+
+	private async findExistingNoteFile(id: number): Promise<TFile | null> {
+		const index = await this.ensureNotePathIndex();
+		const cachedPath = index.get(id);
+		if (cachedPath) {
+			const existing = this.app.vault.getAbstractFileByPath(cachedPath);
+			if (existing instanceof TFile) {
+				return existing;
+			}
+			index.delete(id);
+		}
+
+		const located = await this.scanForNoteFile(id);
+		if (located) {
+			this.registerNotePath(id, located.path);
+		}
+		return located;
+	}
+
+	private async scanForNoteFile(id: number): Promise<TFile | null> {
+		const files = this.app.vault.getFiles();
+		for (const file of files) {
+			const cached = getCachedBlinkoFrontmatter(this.app, file);
+			const source = cached?.source ?? null;
+			if (!this.shouldInspectFile(file, source)) {
 				continue;
 			}
 
-			const existing = this.app.vault.getAbstractFileByPath(candidate);
-			if (existing instanceof TFile) {
+			let meta = cached;
+			if (!meta?.id) {
 				// eslint-disable-next-line no-await-in-loop
-				await this.app.vault.delete(existing);
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			}
+			if (meta?.id === id) {
+				return file;
 			}
 		}
+		return null;
 	}
 
-	private buildNotePathWithFolder(id: number, folderName: string): string {
-		const baseFolder = this.settings.noteFolder?.trim();
-		const filename = `blinko-${id}.md`;
-		const folderPath = baseFolder
-			? normalizePath(`${baseFolder}/${folderName}`)
-			: normalizePath(folderName);
-		return normalizePath(`${folderPath}/${filename}`);
+	private async ensureNotePathIndex(): Promise<Map<number, string>> {
+		if (this.notePathIndex) {
+			return this.notePathIndex;
+		}
+
+		if (!this.notePathIndexPromise) {
+			this.notePathIndexPromise = this.buildNotePathIndex();
+		}
+
+		this.notePathIndex = await this.notePathIndexPromise;
+		this.notePathIndexPromise = null;
+		return this.notePathIndex;
 	}
 
-	private buildLegacyNotePath(id: number): string {
-		const baseFolder = this.settings.noteFolder?.trim();
-		const filename = `blinko-${id}.md`;
-		return baseFolder
-			? normalizePath(`${baseFolder}/${filename}`)
-			: normalizePath(filename);
+	private async buildNotePathIndex(): Promise<Map<number, string>> {
+		const files = this.app.vault.getFiles();
+		const map = new Map<number, string>();
+		for (const file of files) {
+			const cached = getCachedBlinkoFrontmatter(this.app, file);
+			const source = cached?.source ?? null;
+			if (!this.shouldInspectFile(file, source)) {
+				continue;
+			}
+
+			let meta = cached;
+			if (!meta?.id) {
+				// eslint-disable-next-line no-await-in-loop
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			}
+
+			if (!meta?.id || map.has(meta.id)) {
+				continue;
+			}
+
+			map.set(meta.id, file.path);
+		}
+
+		return map;
+	}
+
+	private shouldInspectFile(file: TFile, source?: string | null): boolean {
+		const folder = this.normalizeFolder(this.settings.noteFolder);
+		const inFolder = folder ? this.pathWithinFolder(file.path, folder) : false;
+		if (inFolder) {
+			return true;
+		}
+
+		if (source) {
+			return isBlinkoSourceValue(source);
+		}
+
+		return !folder;
+	}
+
+	private pathWithinFolder(filePath: string, folder: string): boolean {
+		if (!folder) {
+			return true;
+		}
+
+		if (filePath === folder) {
+			return true;
+		}
+
+		return filePath.startsWith(`${folder}/`);
 	}
 
 	private formatLocalTimestamp(value?: string | null): string {

@@ -295,6 +295,27 @@ class BlinkoSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName('Note filename template')
+			.setDesc(
+				'Relative path (without .md) for each note. Use placeholders like {{typeFolder}}, {{type}}, {{id}}, {{title}}, {{created}}, {{created:YYYY/MM/DD}}, or {{updated}}. Slashes create subfolders inside the note folder.',
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder('{{typeFolder}}/blinko-{{id}}')
+					.setValue(this.plugin.settings.notePathTemplate)
+					.onChange(async (value) => {
+						const normalized = value.trim() || '{{typeFolder}}/blinko-{{id}}';
+						if (!/{{\s*id\s*}}/i.test(normalized)) {
+							new Notice('The template must include {{id}} to keep filenames unique.');
+							text.setValue(this.plugin.settings.notePathTemplate);
+							return;
+						}
+						this.plugin.settings.notePathTemplate = normalized;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName('Attachment folder')
 			.setDesc('Folder to store synced attachments')
 			.addText((text) =>

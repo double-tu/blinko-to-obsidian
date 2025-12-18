@@ -1,6 +1,7 @@
 import { App, Notice, TFile, moment, normalizePath } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { FlashNoteJournalEntry } from './types';
+import { getCachedBlinkoFrontmatter, isBlinkoSourceValue, resolveBlinkoFrontmatter } from './noteMetadata';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 
@@ -145,21 +146,31 @@ export class DailyNoteManager {
 	}
 
 	private async loadBlinkoNotesFromVault(targetDate: moment.Moment): Promise<FlashNoteJournalEntry[]> {
-		const folders = this.getBlinkoNoteFolders();
-		if (!folders.length) {
-			return [];
-		}
-
+		const normalizedFolder = this.normalizeFolder(this.settings.noteFolder);
 		const files = this.app.vault.getFiles();
 		const targetKey = targetDate.format(this.dateKeyFormat);
 		const snapshots: FlashNoteJournalEntry[] = [];
 		for (const file of files) {
-			if (!this.isBlinkoNotePath(file.path, folders)) {
+			const cached = getCachedBlinkoFrontmatter(this.app, file);
+			const baseCandidate = this.isBlinkoNoteFile(file.path, normalizedFolder, cached?.source ?? null);
+			if (!baseCandidate && normalizedFolder) {
 				continue;
 			}
 
-			const id = this.parseNoteId(file.name);
-			if (id === null) {
+			let meta = cached;
+			if (!baseCandidate && !normalizedFolder) {
+				// eslint-disable-next-line no-await-in-loop
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			} else if (!meta?.id) {
+				// eslint-disable-next-line no-await-in-loop
+				meta = await resolveBlinkoFrontmatter(this.app, file);
+			}
+
+			if (!meta?.id) {
+				continue;
+			}
+
+			if (!this.isBlinkoNoteFile(file.path, normalizedFolder, meta.source ?? null)) {
 				continue;
 			}
 
@@ -170,7 +181,7 @@ export class DailyNoteManager {
 			}
 
 			snapshots.push({
-				id,
+				id: meta.id,
 				createdAt,
 				filePath: file.path,
 			});
@@ -324,38 +335,11 @@ export class DailyNoteManager {
 		return normalizePath(fullPath);
 	}
 
-	private getBlinkoNoteFolders(): string[] {
-		const folders = new Set<string>();
-		const baseFolder = this.normalizeFolder(this.settings.noteFolder);
-		const typeFolders = ['Flash', 'Note', 'Todo'];
-
-		for (const typeFolder of typeFolders) {
-			const resolved = baseFolder ? `${baseFolder}/${typeFolder}` : typeFolder;
-			const normalized = this.normalizeFolder(resolved);
-			if (normalized) {
-				folders.add(normalized);
-			}
+	private isBlinkoNoteFile(filePath: string, normalizedFolder: string, source?: string | null): boolean {
+		if (normalizedFolder && this.pathStartsWithFolder(filePath, normalizedFolder)) {
+			return true;
 		}
-
-		if (baseFolder) {
-			folders.add(baseFolder);
-		} else {
-			folders.add('');
-		}
-
-		return Array.from(folders);
-	}
-
-	private isBlinkoNotePath(filePath: string, folders: string[]): boolean {
-		return folders.some((folder) => this.pathStartsWithFolder(filePath, folder));
-	}
-
-	private pathStartsWithFolder(filePath: string, folder: string): boolean {
-		if (!folder) {
-			return !filePath.includes('/');
-		}
-		const normalizedFolder = folder.endsWith('/') ? folder : `${folder}/`;
-		return filePath.startsWith(normalizedFolder);
+		return isBlinkoSourceValue(source);
 	}
 
 	private normalizeFolder(input?: string): string {
@@ -366,13 +350,16 @@ export class DailyNoteManager {
 		return normalizePath(trimmed);
 	}
 
-	private parseNoteId(filename: string): number | null {
-		const match = filename.match(/^blinko-(\d+)\.md$/i);
-		if (!match) {
-			return null;
+	private pathStartsWithFolder(filePath: string, folder: string): boolean {
+		if (!folder) {
+			return true;
 		}
-		const value = Number(match[1]);
-		return Number.isNaN(value) ? null : value;
+
+		if (filePath === folder) {
+			return true;
+		}
+
+		return filePath.startsWith(`${folder}/`);
 	}
 
 	private resolveCreatedAt(file: TFile): string {

@@ -15,6 +15,7 @@ export interface BlinkoAttachment {
 
 export interface BlinkoNote {
 	id: number;
+	title?: string;
 	content?: string;
 	type?: number;
 	createdAt: string;

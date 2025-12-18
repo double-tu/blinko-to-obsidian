@@ -2,6 +2,7 @@ export interface BlinkoSettings {
 	serverUrl: string;
 	accessToken: string;
 	noteFolder: string;
+	notePathTemplate: string;
 	attachmentFolder: string;
 	dailyNotesToggle: boolean;
 	dailyNotesLocation: string;
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS: BlinkoSettings = {
 	serverUrl: '',
 	accessToken: '',
 	noteFolder: 'Blinko/Notes',
+	notePathTemplate: '{{typeFolder}}/blinko-{{id}}',
 	attachmentFolder: 'Blinko/Attachments',
 	dailyNotesToggle: false,
 	dailyNotesLocation: '/',
