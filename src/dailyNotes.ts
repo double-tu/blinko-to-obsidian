@@ -1,12 +1,10 @@
 import { App, Notice, TFile, moment, normalizePath } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { FlashNoteJournalEntry } from './types';
-import { buildBlinkoBlockId } from './noteUtils';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 
 interface DailyNoteReferenceBlock {
-	blockId: string;
 	filePath: string;
 	createdAt: number;
 }
@@ -175,7 +173,6 @@ export class DailyNoteManager {
 				id,
 				createdAt,
 				filePath: file.path,
-				blockId: buildBlinkoBlockId(id),
 			});
 		}
 
@@ -190,9 +187,8 @@ export class DailyNoteManager {
 		}
 
 		const blocks: DailyNoteReferenceBlock[] = notes
-			.filter((note) => Boolean(note.blockId && note.filePath))
+			.filter((note) => Boolean(note.filePath))
 			.map((note) => ({
-				blockId: note.blockId,
 				filePath: this.toLinkPath(note.filePath),
 				createdAt: this.getTimestamp(note.createdAt),
 			}))

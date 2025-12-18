@@ -2,14 +2,12 @@ import { App, normalizePath, TFile, TFolder, moment } from 'obsidian';
 import { BlinkoSettings } from './settings';
 import { BlinkoNote, BlinkoTag } from './types';
 import { BlinkoClient } from './client';
-import { buildBlinkoBlockId } from './noteUtils';
 
 type Logger = (message: string, ...values: unknown[]) => void;
 
 export interface SavedNoteResult {
 	attachments: string[];
 	filePath: string;
-	blockId: string;
 }
 
 export class VaultAdapter {
@@ -26,8 +24,7 @@ export class VaultAdapter {
 
 	async saveNote(note: BlinkoNote): Promise<SavedNoteResult> {
 		const { block: attachmentBlock, storedAttachments, content } = await this.processAttachments(note);
-		const blockId = buildBlinkoBlockId(note.id);
-		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content, blockId);
+		const markdown = this.generateMarkdown(note, attachmentBlock, storedAttachments, content);
 		const filePath = this.buildNotePath(note.id, note.type);
 		await this.cleanupOtherTypeLocations(note.id, filePath);
 		await this.writeOrUpdate(filePath, markdown);
@@ -35,7 +32,6 @@ export class VaultAdapter {
 		return {
 			attachments: storedAttachments,
 			filePath,
-			blockId,
 		};
 	}
 
@@ -91,7 +87,6 @@ export class VaultAdapter {
 		attachmentBlock: string,
 		attachments: string[],
 		content: string,
-		blockId: string,
 	) {
 		const frontmatterLines = [
 			'---',
@@ -114,8 +109,8 @@ export class VaultAdapter {
 
 		const body = content ?? '';
 		const composedBody = `${body}${attachmentBlock}`;
-		const bodyWithMarker = this.ensureBlockId(composedBody, blockId);
-		return `${frontmatter}${bodyWithMarker}`;
+		const normalizedBody = this.ensureTrailingNewline(composedBody);
+		return `${frontmatter}${normalizedBody}`;
 	}
 
 	private sanitizeFilename(name: string): string {
@@ -388,32 +383,12 @@ export class VaultAdapter {
 		return parsed.local().format('YYYY-MM-DDTHH:mm:ssZ');
 	}
 
-	private ensureBlockId(content: string, blockId: string): string {
-		if (!blockId) {
-			return content;
+	private ensureTrailingNewline(content: string): string {
+		const normalized = (content ?? '').replace(/\r\n/g, '\n');
+		if (!normalized.trim().length) {
+			return '\n';
 		}
 
-		const marker = `^${blockId}`;
-		const normalized = content.replace(/\r\n/g, '\n');
-		const trimmed = normalized.trim();
-		if (!trimmed.length) {
-			return `${marker}\n`;
-		}
-
-		if (normalized.includes(marker)) {
-			return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
-		}
-
-		const lines = normalized.split('\n');
-		for (let index = lines.length - 1; index >= 0; index -= 1) {
-			const line = lines[index];
-			if (!line || !line.trim().length) {
-				continue;
-			}
-			lines[index] = `${line} ${marker}`;
-			return `${lines.join('\n')}\n`;
-		}
-
-		return `${normalized} ${marker}\n`;
+		return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
 	}
 }

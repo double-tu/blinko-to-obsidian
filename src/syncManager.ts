@@ -111,7 +111,6 @@ export class SyncManager {
 			id: note.id,
 			createdAt: note.createdAt,
 			filePath: result.filePath,
-			blockId: result.blockId,
 			type: note.type,
 		};
 	}
