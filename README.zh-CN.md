@@ -86,6 +86,13 @@
 
    插件会自动将内容填充到这两行之间。
 
+4. **自动创建缺失的日记 (可选)**：
+
+   - 先在 Obsidian 中安装并启用社区插件 **Templater**（ID：`templater-obsidian`），并在它的设置里打开 **Trigger on new file creation** 选项。Blinko 会调用它的内部事件，让 Templater 根据你的文件夹模板自动生成内容。
+   - 在 Blinko 设置中启用 **Auto-create missing Daily Notes**。同步时如果发现目标日期的日记文件不存在，就会自动创建文件、触发 Templater，然后再写入闪念内容。
+   - 如果你的模板比较复杂，需要一定时间才能渲染出标记，可以通过 **Template settle delay (ms)** 设置在创建文件后等待的毫秒数（例如 500、1000）。如果仍然提示找不到标记，可以适当调大，设为 `0` 则立即寻找而不等待。
+   - 如果系统里没有安装/启用 Templater，Blinko 仍然会创建一个空白文件并输出警告，提示你先补齐依赖再重新同步。
+
 #### 🤖 AI 标题生成 (可选)
 
 让你的文件列表更直观，而不是全是 `blinko-123`。

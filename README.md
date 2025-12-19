@@ -84,6 +84,13 @@ Embed today's thoughts directly into your journal.
 
    The plugin will overwrite the content between these markers with the latest sync data.
 
+4. **Auto-create missing Daily Notes (optional)**:
+
+   - Install and enable the community plugin **Templater** (`templater-obsidian`) and turn on its **Trigger on new file creation** option. Blinko piggybacks on that hook to apply your folder template exactly as if you had created the file yourself.
+   - Enable **Auto-create missing Daily Notes** in Blinko’s settings. When a sync needs a daily note that does not exist yet, the plugin creates it, triggers Templater, waits for your template to finish (see below), and only then injects the Blinko block.
+   - Some template stacks take a moment to render. Use **Template settle delay (ms)** to specify how long Blinko should wait after creating the file before it searches for the markers. Increase the delay if you still see “start marker not found” messages; set it to `0` to skip the wait.
+   - If Templater is missing or disabled, the file is still created but remains blank; the plugin logs a warning so you can fix the dependency before the next sync.
+
 #### 🤖 AI Title Generation (Optional)
 
 Replace generic filenames with descriptive titles.
