@@ -41,7 +41,7 @@
 进入 **Settings (设置) -> Blinko Sync**：
 
 - **Server Connection (服务器连接)**:
-  - **Server URL**: 填写你的 Blinko 部署地址 (例如 `https://my-blinko.com`，无需加 `/api`)。
+  - **Server URL**: 填写你的 Blinko 部署地址 (例如 `https://my-blinko.com/api`)。
   - **Access Token**: 在 Blinko 设置中生成的 API Token。
 - **Storage (存储设置)**:
   - **Note folder**: 存放同步下来的笔记的根目录（例如 `Blinko/Notes`）。
