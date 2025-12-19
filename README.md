@@ -39,7 +39,7 @@ It continuously imports your Flash thoughts, Notes, and Todos along with their a
 Go to **Settings -> Blinko Sync**:
 
 - **Server Connection**:
-  - **Server URL**: Your Blinko instance URL (e.g., `https://my-blinko.com`).
+  - **Server URL**: Your Blinko instance URL (e.g., `https://my-blinko.com/api`).
   - **Access Token**: The API Token generated in your Blinko settings.
 - **Storage**:
   - **Note folder**: Where to save the notes (e.g., `Blinko/Notes`).
