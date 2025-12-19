@@ -7,6 +7,8 @@ export interface BlinkoSettings {
 	dailyNotesToggle: boolean;
 	dailyNotesLocation: string;
 	dailyNotesFormat: string;
+	dailyNotesAutoCreate: boolean;
+	dailyNotesTemplateDelayMs: number;
 	dailyNotesInsertAfter: string;
 	dailyNotesInsertBefore: string;
 	dailyNotesEmbedContent: boolean;
@@ -36,6 +38,8 @@ export const DEFAULT_SETTINGS: BlinkoSettings = {
 	dailyNotesToggle: false,
 	dailyNotesLocation: '/',
 	dailyNotesFormat: 'YYYY-MM-DD',
+	dailyNotesAutoCreate: false,
+	dailyNotesTemplateDelayMs: 0,
 	dailyNotesInsertAfter: '<!-- start of flash-notes -->',
 	dailyNotesInsertBefore: '<!-- end of flash-notes -->',
 	dailyNotesEmbedContent: false,

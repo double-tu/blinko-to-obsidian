@@ -103,7 +103,14 @@ export default class BlinkoSyncPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		let stored: Partial<BlinkoSettings> | null = null;
+		try {
+			stored = await this.loadData();
+		} catch (error) {
+			console.error('[Blinko Sync] Failed to load settings, falling back to defaults.', error);
+		}
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, stored ?? {});
+		this.migrateLegacySettings();
 	}
 
 	async saveSettings() {
@@ -113,6 +120,14 @@ export default class BlinkoSyncPlugin extends Plugin {
 
 	private async persistSettingsOnly() {
 		await this.saveData(this.settings);
+	}
+
+	private migrateLegacySettings() {
+		if (!Number.isFinite(this.settings.dailyNotesTemplateDelayMs)) {
+			this.settings.dailyNotesTemplateDelayMs = DEFAULT_SETTINGS.dailyNotesTemplateDelayMs;
+		} else if (this.settings.dailyNotesTemplateDelayMs < 0) {
+			this.settings.dailyNotesTemplateDelayMs = 0;
+		}
 	}
 
 	private initializeServices() {
@@ -572,6 +587,35 @@ class BlinkoSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			});
 		});
+
+		new Setting(containerEl)
+			.setName('Auto-create missing Daily Notes')
+			.setDesc(
+				'When enabled, missing Daily Notes are created automatically via the Templater plugin before inserting Blinko entries.',
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.dailyNotesAutoCreate).onChange(async (value) => {
+					this.plugin.settings.dailyNotesAutoCreate = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Template settle delay (ms)')
+			.setDesc('Wait this long after creating a Daily Note before inserting anything, giving templates time to render.')
+			.addText((text) => {
+				text.inputEl.type = 'number';
+				text.inputEl.min = '0';
+				text
+					.setValue(String(this.plugin.settings.dailyNotesTemplateDelayMs || 0))
+					.onChange(async (value) => {
+						const parsed = Number(value);
+						this.plugin.settings.dailyNotesTemplateDelayMs = Number.isFinite(parsed)
+							? Math.max(0, Math.round(parsed))
+							: 0;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName('Daily note format')

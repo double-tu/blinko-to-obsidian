@@ -29,8 +29,24 @@ interface MarkerBounds {
 	normalizedEnd: string;
 }
 
+interface DailyNoteLookupResult {
+	file: TFile;
+	created: boolean;
+}
+
+interface TemplaterPluginInstance {
+	templater?: {
+		on_file_creation?: (file: TFile) => Promise<void>;
+	};
+	settings?: {
+		trigger_on_file_creation?: boolean;
+	};
+}
+
 export class DailyNoteManager {
 	private readonly dateKeyFormat = 'YYYYMMDD';
+	private templaterMissingNoticeShown = false;
+	private templaterTriggerNoticeShown = false;
 
 	constructor(
 		private app: App,
@@ -134,13 +150,20 @@ export class DailyNoteManager {
 		this.log('Daily Notes: processing %s at %s.', displayDate, dailyNotePath);
 
 		try {
-			const file = this.getExistingDailyNote(dailyNotePath);
-			if (!file) {
+			const lookup = await this.getOrCreateDailyNote(dailyNotePath, displayDate);
+			if (!lookup) {
 				this.log(`Daily Note not found for ${displayDate} at ${dailyNotePath}, skipping.`);
 				return;
 			}
 
-			this.log('Daily Notes: found existing note at %s.', file.path);
+			const { file, created } = lookup;
+			if (created) {
+				await this.waitForTemplateProcessing(file);
+				this.log('Daily Notes: created note at %s.', file.path);
+			} else {
+				this.log('Daily Notes: found existing note at %s.', file.path);
+			}
+
 			const allNotes = await this.collectBlinkoNotesForDate(targetDate, newNotes);
 			const references = this.buildReferenceGroups(allNotes);
 			if (!references.length) {
@@ -421,6 +444,153 @@ export class DailyNoteManager {
 	private getExistingDailyNote(path: string): TFile | null {
 		const abstract = this.app.vault.getAbstractFileByPath(path);
 		return abstract instanceof TFile ? abstract : null;
+	}
+
+	private async getOrCreateDailyNote(path: string, displayDate: string): Promise<DailyNoteLookupResult | null> {
+		const existing = this.getExistingDailyNote(path);
+		if (existing) {
+			return { file: existing, created: false };
+		}
+
+		if (!this.settings.dailyNotesAutoCreate) {
+			this.log(
+				'Daily Notes: no note found at %s for %s, and auto-creation is disabled. Skipping templated creation.',
+				path,
+				displayDate,
+			);
+			return null;
+		}
+
+		const file = await this.createDailyNote(path, displayDate);
+		return file ? { file, created: true } : null;
+	}
+
+	private async createDailyNote(path: string, displayDate: string): Promise<TFile | null> {
+		const normalizedPath = normalizePath(path);
+		const folder = this.getFolderFromPath(normalizedPath);
+		this.log('Daily Notes: auto-creating missing note for %s at %s.', displayDate, normalizedPath);
+
+		try {
+			await this.ensureFolderExists(folder);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error ?? '');
+			this.log('Daily Notes: unable to create folder %s for %s. %s', folder || '<vault root>', normalizedPath, reason);
+			new Notice(`Failed to create folder for Daily Note (${folder || 'vault root'}): ${reason}`);
+			return null;
+		}
+
+		try {
+			const file = await this.app.vault.create(normalizedPath, '');
+			await this.triggerTemplaterForFile(file, displayDate);
+			return file;
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error ?? '');
+			if (/exists/i.test(reason)) {
+				this.log('Daily Notes: detected concurrent creation for %s. Reusing existing file.', normalizedPath);
+				return this.getExistingDailyNote(normalizedPath);
+			}
+
+			this.log('Daily Notes: failed to create %s for %s: %s', normalizedPath, displayDate, reason);
+			new Notice(`Failed to create Daily Note (${displayDate}): ${reason}`);
+			return null;
+		}
+	}
+
+	private getFolderFromPath(path: string): string {
+		const separatorIndex = path.lastIndexOf('/');
+		if (separatorIndex === -1) {
+			return '';
+		}
+		return path.slice(0, separatorIndex);
+	}
+
+	private async ensureFolderExists(folder: string): Promise<void> {
+		if (!folder) {
+			return;
+		}
+
+		const normalized = normalizePath(folder);
+		const segments = normalized.split('/').filter((segment) => segment.length);
+		let current = '';
+
+		for (const segment of segments) {
+			current = current ? `${current}/${segment}` : segment;
+			// eslint-disable-next-line no-await-in-loop
+			const exists = await this.app.vault.adapter.exists(current);
+			if (exists) {
+				continue;
+			}
+
+			try {
+				// eslint-disable-next-line no-await-in-loop
+				await this.app.vault.createFolder(current);
+				this.log('Daily Notes: created folder %s for auto-generated notes.', current);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error ?? '');
+				if (/exist/i.test(reason)) {
+					continue;
+				}
+				throw error instanceof Error ? error : new Error(String(error ?? 'Unknown error'));
+			}
+		}
+	}
+
+	private async triggerTemplaterForFile(file: TFile, displayDate: string): Promise<void> {
+		const templater = this.getTemplaterPlugin();
+		if (!templater?.templater?.on_file_creation) {
+			if (!this.templaterMissingNoticeShown) {
+				new Notice(
+					'Templater plugin is required to auto-create Daily Notes. Please install and enable templater-obsidian.',
+				);
+				this.templaterMissingNoticeShown = true;
+			}
+			this.log(
+				'Daily Notes: Templater plugin missing or incompatible while creating %s. Created blank note at %s.',
+				displayDate,
+				file.path,
+			);
+			return;
+		}
+
+		if (templater.settings && templater.settings.trigger_on_file_creation === false && !this.templaterTriggerNoticeShown) {
+			new Notice('Templater setting "Trigger on new file creation" is disabled. Folder templates may not run.');
+			this.templaterTriggerNoticeShown = true;
+		}
+
+		try {
+			await templater.templater.on_file_creation(file);
+			this.log('Daily Notes: triggered Templater folder template for %s.', file.path);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error ?? '');
+			this.log('Daily Notes: Templater failed while processing %s: %s', file.path, reason);
+			new Notice(`Templater failed to initialize ${file.basename}: ${reason}`);
+		}
+	}
+
+	private async waitForTemplateProcessing(file: TFile): Promise<void> {
+		const delayMs = Math.max(0, this.settings.dailyNotesTemplateDelayMs || 0);
+		if (!delayMs) {
+			return;
+		}
+
+		this.log('Daily Notes: waiting %dms for template population of %s.', delayMs, file.path);
+		await this.delay(delayMs);
+	}
+
+	private async delay(ms: number): Promise<void> {
+		if (ms <= 0) {
+			return;
+		}
+		await new Promise((resolve) => window.setTimeout(resolve, ms));
+	}
+
+	private getTemplaterPlugin(): TemplaterPluginInstance | null {
+		const pluginManager = (this.app as App & { plugins?: { getPlugin(id: string): unknown } }).plugins;
+		if (!pluginManager) {
+			return null;
+		}
+		const templater = pluginManager.getPlugin('templater-obsidian');
+		return templater ? (templater as unknown as TemplaterPluginInstance) : null;
 	}
 
 	private getDailyNotePath(targetDate: moment.Moment): string | null {
